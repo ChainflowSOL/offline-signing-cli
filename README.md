@@ -58,65 +58,146 @@ Before you can use the tool, you need a Durable Nonce account.
 * **Payer:** A hot wallet on your online machine.
 * **Authority:** The Public Key of your Cold Wallet.
 
+<details open>
+<summary>Linux</summary>
+
   ```bash
-  ./offline-signer-cli create-nonce \
-    --env _ \
-    --payer <path/to/hot-wallet.json> \
-    --authority <COLD_WALLET_PUBKEY>
-    ```
-* **Result:** A `nonce-account.json` file is saved. Keep the address safe.
+  ./offline-signer-cli-linux create-nonce \
+    --env devnet \
+    --payer "<path/to/hot-wallet.json>" \
+    --authority "<COLD_WALLET_PUBKEY>"
+  ```
+</details>
+
+<details>
+<summary>macOS</summary>
+
+  ```bash
+  ./offline-signer-cli-macos create-nonce \
+    --env devnet \
+    --payer "<path/to/hot-wallet.json>" \
+    --authority "<COLD_WALLET_PUBKEY>"
+  ```
+</details>
+
+* **Result:** A `nonceAddress.json` file is saved. Keep the address safe.
 
 ### Step 1: Construct (Online)
 
 On your **online** machine, run the `sol-transfer` or `token-transfer` command to build your transaction. This creates the `unsigned-tx.json` file.
 
 *For SOL Transfer:*
+
+<details open>
+  <summary>Linux</summary>
+  
 ```bash
-./offline-signer-cli sol-transfer \
-  --env _ \
-  --sender <COLD_WALLET_PUBKEY> \
-  --recipient <RECIPIENT_PUBKEY> \
-  --amount _ \
-  --nonce <NONCE_ACCOUNT_PUBKEY>
+./offline-signer-cli-linux sol-transfer \
+  --env devnet \
+  --sender "<COLD_WALLET_PUBKEY>" \
+  --recipient "<RECIPIENT_PUBKEY>" \
+  --amount 0.1 \
+  --nonce "<NONCE_ACCOUNT_PUBKEY>"
 ```
+</details>
+
+<details>
+  <summary>macOS</summary>
+  
+```bash
+./offline-signer-cli-macos sol-transfer \
+  --env devnet \
+  --sender "<COLD_WALLET_PUBKEY>" \
+  --recipient "<RECIPIENT_PUBKEY>" \
+  --amount 0.1 \
+  --nonce "<NONCE_ACCOUNT_PUBKEY>"
+```
+</details>
 
 *For Token Transfer:*
+<details open>
+<summary>Linux</summary>
+
 ```bash
-./offline-signer-cli token-transfer \
-  --env _ \
-  --sender <COLD_WALLET_PUBKEY> \
-  --recipient <RECIPIENT_PUBKEY> \
-  --mint <TOKEN_MINT_ADDRESS> \
-  --amount _ \
-  --nonce <NONCE_ACCOUNT_PUBKEY>
+./offline-signer-cli-linux token-transfer \
+  --env devnet \
+  --sender "<COLD_WALLET_PUBKEY>" \
+  --recipient "<RECIPIENT_PUBKEY>" \
+  --mint "<TOKEN_MINT_ADDRESS>" \
+  --amount 0.1 \
+  --nonce "<NONCE_ACCOUNT_PUBKEY>"
 ```
+</details>
+
+<details>
+<summary>macOS</summary>
+
+```bash
+./offline-signer-cli-macos token-transfer \
+  --env devnet \
+  --sender "<COLD_WALLET_PUBKEY>" \
+  --recipient "<RECIPIENT_PUBKEY>" \
+  --mint "<TOKEN_MINT_ADDRESS>" \
+  --amount 0.1 \
+  --nonce "<NONCE_ACCOUNT_PUBKEY>"
+```
+</details>
 
 * **Result:** `unsigned-tx.json` is created.
-* **Note:** Copy `unsigned-tx.json` & `cold-wallet.json` files to your air-gapped machine via USB.
+* **Note:** Copy `unsigned-tx.json` file to your air-gapped machine via USB.
 
 ### Step 2: Sign (Offline)
 On your **air-gapped** machine, run the `sign` command. It will read your keypair and the unsigned transaction, and create a new file with the signature.
 
+<details open>
+<summary>Linux</summary>
+  
 ```bash
-./offline-signer-cli sign \
-  --keypair <path/to/cold-wallet.json> \
-  --unsigned <path/to/unsigned-tx.json>
+./offline-signer-cli-linux sign \
+  --keypair "<path/to/cold-wallet.json>" \
+  --unsigned "<path/to/unsigned-tx.json>"
 ```
+</details>
 
-* **Result:** `signature.json` is created.
-* **Note:** Copy `signature.json` file back to your online machine.
+<details>
+<summary>macOS</summary>
+  
+```bash
+./offline-signer-cli-macos sign \
+  --keypair "<path/to/cold-wallet.json>" \
+  --unsigned "<path/to/unsigned-tx.json>"
+```
+</details>
+
+* **Result:** `signed-tx.json` is created.
+* **Note:** Copy `signed-tx.json` file back to your online machine.
 
 ### Step 3: Broadcast (Online)
 On your **online** machine, run the `broadcast` command. It will read the original message and the new signature, combine them, and send the transaction.
 
+<details open>
+<summary>Linux</summary>
+  
 ```bash
-./offline-signer-cli broadcast \
+./offline-signer-cli-linux broadcast \
   --env devnet \
-  --unsigned <path/to/unsigned-tx.json> \
-  --signature <path/to/signature.json>
+  --unsigned "<path/to/unsigned-tx.json>" \
+  --signature "<path/to/signed-tx.json>"
 ```
+  </details>
+  
+<details>
+<summary>macOS</summary>
+  
+```bash
+./offline-signer-cli-macos broadcast \
+  --env devnet \
+  --unsigned "<path/to/unsigned-tx.json>" \
+  --signature "<path/to/signed-tx.json>"
+```
+  </details>
+  
 * **Result:** Prints the final Transaction Signature and Explorer link.
-
 ---
 
 ## Command Reference
@@ -147,13 +228,13 @@ Constructs an unsigned SPL Token transfer.
 
 ### `sign`
 Signs an unsigned transaction message on an offline machine.
-* `--unsigned <path>`: (Alias: `-u`) Path to the `unsigned-tx.json` file.
-* `--keypair <path>`: (Alias: `-k`) Path to your cold wallet keypair(JSON).
+* `--unsigned <path>`: (Alias: `-u`) Path to the `unsigned-tx.json` file. (Default: *./unsigned-tx.json*)
+* `--keypair <path>`: (Alias: `-k`) Path to your cold wallet keypair(JSON). (Default: *./cold-wallet.json*)
 
 ### `broadcast`
 Broadcasts a signed transaction to the network.
-* `--unsigned <path>`: (Alias: `-u`) Path to the original `unsigned-tx.json` file. 
-* `--signature <path>`: (Alias: `-s`) Path to the `signature.json` file.
+* `--unsigned <path>`: (Alias: `-u`) Path to the original `unsigned-tx.json` file. (Default: *./unsigned-tx.json*)
+* `--signature <path>`: (Alias: `-s`) Path to the `signature.json` file. (Default: *./signed-tx.json*)
 
 ---
 
