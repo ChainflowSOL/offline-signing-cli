@@ -57,7 +57,7 @@ export async function signOffline(keypairPath: string, unsignedPath: string) {
     const signature = nacl.sign.detached(messageBuffer, keypair.secretKey);
     const signatureBase64 = Buffer.from(signature).toString("base64");
     
-    saveJson("signature.json", {
+    saveJson("signed-tx.json", {
         signature: signatureBase64,
         publicKey: keypair.publicKey.toBase58()
     });
