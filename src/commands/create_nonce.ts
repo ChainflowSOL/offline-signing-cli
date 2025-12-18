@@ -50,7 +50,7 @@ export async function createNonce(
       console.log(`\nNonce Account Created!`);
       console.log(`Tx Signature: ${txId}`);
       
-      saveJson("nonceAddress.json", {
+      saveJson("nonce-address.json", {
         address: nonceKeypair.publicKey.toBase58(),
         authority: authority.toBase58(),
         network: env
