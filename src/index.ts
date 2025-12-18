@@ -93,7 +93,7 @@ const argv = yargs(hideBin(process.argv))
     (yargs) => {
       return yargs
         .option('unsigned', { alias: 'u', type: 'string', default: 'unsigned-tx.json' })
-        .option('signature', { alias: 's', type: 'string', default: 'signature.json' });
+        .option('signature', { alias: 's', type: 'string', default: 'signed-tx.json' });
     },
     (argv) => {
       broadcast(argv.env, argv.unsigned, argv.signature);
