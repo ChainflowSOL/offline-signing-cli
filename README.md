@@ -64,7 +64,7 @@ Before you can use the tool, you need a Durable Nonce account.
   ```bash
   ./offline-signer-cli-linux create-nonce \
     --env devnet \
-    --payer "<path/to/hot-wallet.json>" \
+    --payer <path/to/hot-wallet.json> \
     --authority "<COLD_WALLET_PUBKEY>"
   ```
 </details>
@@ -75,7 +75,7 @@ Before you can use the tool, you need a Durable Nonce account.
   ```bash
   ./offline-signer-cli-macos create-nonce \
     --env devnet \
-    --payer "<path/to/hot-wallet.json>" \
+    --payer <path/to/hot-wallet.json> \
     --authority "<COLD_WALLET_PUBKEY>"
   ```
 </details>
@@ -154,8 +154,8 @@ On your **air-gapped** machine, run the `sign` command. It will read your keypai
   
 ```bash
 ./offline-signer-cli-linux sign \
-  --keypair "<path/to/cold-wallet.json>" \
-  --unsigned "<path/to/unsigned-tx.json>"
+  --keypair <path/to/cold-wallet.json> \
+  --unsigned <path/to/unsigned-tx.json>
 ```
 </details>
 
@@ -164,8 +164,8 @@ On your **air-gapped** machine, run the `sign` command. It will read your keypai
   
 ```bash
 ./offline-signer-cli-macos sign \
-  --keypair "<path/to/cold-wallet.json>" \
-  --unsigned "<path/to/unsigned-tx.json>"
+  --keypair <path/to/cold-wallet.json> \
+  --unsigned <path/to/unsigned-tx.json>
 ```
 </details>
 
@@ -181,8 +181,8 @@ On your **online** machine, run the `broadcast` command. It will read the origin
 ```bash
 ./offline-signer-cli-linux broadcast \
   --env devnet \
-  --unsigned "<path/to/unsigned-tx.json>" \
-  --signature "<path/to/signed-tx.json>"
+  --unsigned <path/to/unsigned-tx.json> \
+  --signature <path/to/signed-tx.json>
 ```
   </details>
   
@@ -192,8 +192,8 @@ On your **online** machine, run the `broadcast` command. It will read the origin
 ```bash
 ./offline-signer-cli-macos broadcast \
   --env devnet \
-  --unsigned "<path/to/unsigned-tx.json>" \
-  --signature "<path/to/signed-tx.json>"
+  --unsigned <path/to/unsigned-tx.json> \
+  --signature <path/to/signed-tx.json>
 ```
   </details>
   
