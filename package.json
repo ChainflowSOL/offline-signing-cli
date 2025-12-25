@@ -7,11 +7,9 @@
   },
   "scripts": {
     "build:ts": "tsc",
-    "build:bundle": "esbuild dist/index.js --bundle --platform=node --target=node18 --outfile=dist/bundle.js --format=cjs",
+    "build:bundle": "esbuild dist/index.js --bundle --minify --platform=node --target=node18 --outfile=dist/bundle.js --format=cjs",
     "build": "pnpm build:ts && pnpm build:bundle && pkg .",
-
     "start": "node dist/bundle.js",
-
     "dev": "ts-node src/index.ts",
     "create_nonce": "ts-node src/commands/create_nonce.ts"
   },
@@ -32,6 +30,11 @@
     "pkg": "^5.8.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "chalk": "4.1.2"
+    }
   },
   "pkg": {
     "scripts": "dist/bundle.js",
