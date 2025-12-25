@@ -31,7 +31,7 @@ dist/
 cold-wallet.json
 unsigned-tx.json
 signature.json
-nonce-account.json
+nonce-address.json
 
 # -----------------------------
 # OS / System Files
