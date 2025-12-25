@@ -28,13 +28,13 @@ It is designed to be run in a secure, air-gapped workflow.
 ## Installation
 
 ### Option 1: Download Binary
-Download the latest executable for your OS from the [Releases Page](https://github.com/Kym0211/offline-signing-cli/releases) (Linux, macOS, Windows).
+Download the latest executable for your OS from the [Releases Page](https://github.com/ChainflowSOL/offline-signing-cli/releases) (Linux, macOS, Windows).
 *No Node.js or dependencies required.*
 
 ### Option 2: Build from Source
 ```bash
 # 1. Clone
-gh repo clone Kym0211/offline-signing-cli
+gh repo clone ChainflowSOL/offline-signing-cli
 cd offline-signer-toolkit
 
 # 2. Install
@@ -45,10 +45,33 @@ pnpm build
 ```
 ---
 
+## Prerequisites & Dependencies
+
+To run or build this tool from source, you will need the following installed on your system:
+
+### System Requirements
+* **Node.js (v18 or higher):** [Download Here](https://nodejs.org/)
+* **pnpm:** The package manager used for this repo.
+    ```bash
+    npm install -g pnpm
+    ```
+* **Git:** To clone the repository.
+
+### Libraries & Tech Stack
+
+* **[tweetnacl](https://github.com/dchest/tweetnacl-js):** Implements the **Ed25519** signature scheme. This is the cryptographic engine used to securely sign transactions offline without exposing private keys.
+* **[@solana/web3.js](https://github.com/solana-labs/solana-web3.js):** Standard library for Solana blockchain interaction.
+* **[@solana/spl-token](https://github.com/solana-labs/solana-program-library):** Handles all SPL Token transfers.
+* **[Commander.js](https://github.com/tj/commander.js):** Manages command-line arguments and sub-commands.
+* **[Chalk (v4)](https://github.com/chalk/chalk):** Terminal styling.
+    > ⚠️ **Dev Note:** We strictly use **Chalk v4.1.2** to ensure compatibility with the `pkg` binary compiler (v5+ is ESM-only).
+* **[pkg](https://github.com/vercel/pkg):** Compiles the project into standalone executables.
+* **[esbuild](https://github.com/evanw/esbuild):** Bundles TypeScript for fast compilation.
+
+---
 ## The Workflow
 
 This tool is designed to be run in a 3-step process that moves between your internet-connected (online) and air-gapped (offline) machines.
-
 
 
 ### One-Time Setup (Online)
