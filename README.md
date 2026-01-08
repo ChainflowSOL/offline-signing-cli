@@ -43,6 +43,7 @@ pnpm install
 # 3. Build (Generates binaries in dist/executables/)
 pnpm build
 ```
+> **Build Note:** You may see "Cannot resolve" warnings during the build process. These are false positives caused by `pkg` analyzing the minified bundle. If the build completes successfully, these can be safely ignored.
 ---
 
 ## Prerequisites & Dependencies
@@ -261,15 +262,24 @@ Broadcasts a signed transaction to the network.
 
 ---
 
-## Development
-To build the project locally:
-  ```bash
-  # Install dependencies
-  pnpm install
+## Contributing
 
-  # Run in dev mode 
-  pnpm dev token-transfer --env devnet ...
+Contributions are welcome! If you are looking for ideas on where to start, we are currently looking for:
 
-  # Build binaries
-  pnpm build
-  ```
+* **New Commands:** Staking (`stake`), Vote Accounts, and Governance proposals.
+
+### How to Contribute
+1.  **Fork** the repository.
+2.  **Clone** your fork locally.
+3.  **Create a branch** for your feature (`git checkout -b feature/new-command`).
+4.  **Commit** your changes (`git commit -m 'feat: added staking support'`).
+5.  **Push** to the branch (`git push origin feature/new-command`).
+6.  Open a **Pull Request**.
+
+---
+
+## Contact & Support
+
+If you encounter any issues or unexpected behavior, please check the [Issue Tracker](https://github.com/ChainflowSOL/offline-signing-cli/issues) to see if it has already been reported. If not, please open a new issue.
+
+For direct inquiries or feedback, reach out to us on X: **[@ChainflowSOL](https://x.com/ChainflowSOL)**
