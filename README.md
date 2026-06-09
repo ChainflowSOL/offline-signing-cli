@@ -1,285 +1,255 @@
-# Offline Signer CLI
+# offline-signer-cli
 
-This toolkit provides a secure, standalone command-line executable for executing sensitive Solana transactions without exposing your private key to the internet.
+An offline Solana transaction signing CLI backed by a custom on-chain program
+("Vector"). The cold wallet never signs a full Solana transaction — it signs
+only a 32-byte digest, which is verified on-chain via the native Ed25519
+precompile + instruction introspection.
 
-It is designed to be run in a secure, air-gapped workflow.
+This replaces the previous durable-nonce design. Durable nonces are being
+deprecated; Vector uses no nonces and has no per-cluster external dependency
+beyond the always-deployed Ed25519 precompile.
 
-## The Problem
-1.  **Private Key Exposure:** Standard wallet workflows require your private key to be on an internet-connected device, increasing security risks for high-value operations.
-2.  **Transaction Expiration:** Standard offline signing workflows are difficult on Solana due to the short lifespan (~1-2 minutes) of the `recentBlockhash`, making a manual air-gapped process unreliable.
+## Architecture
 
-## The Solution
-1.  **Durable Nonces:** We eliminate the `recentBlockhash` problem by using a **Durable Nonce** account. This allows a transaction to be constructed online, signed securely offline, and broadcast hours or days later without expiring.
-2.  **Air-Gapped Workflow:** The CLI is a single, standalone executable that can be run on any machine (online or offline) without an internet connection or any dependencies. Your private key *never* touches the internet.
-3.  **Standalone Executable:** This tool is packaged as a single binary. There is no need to install Node.js, npm, or any other libraries.
+### System view
 
----
+```mermaid
+flowchart LR
+    subgraph OFFLINE["🔒 OFFLINE machine (air-gapped)"]
+        ColdKey[/"cold-wallet.json<br/>Ed25519 secret key"/]
+        SignCmd["pnpm dev sign"]
+        ColdKey --> SignCmd
+    end
 
-## Security Features
+    subgraph ONLINE["🌐 ONLINE machine (hot wallet)"]
+        HotKey[/"hot-wallet.json<br/>fee payer"/]
+        ConstructCmd["sol-transfer<br/>token-transfer<br/>close-authority"]
+        BroadcastCmd["broadcast"]
+        HotKey --> BroadcastCmd
+        ConstructCmd --> Unsigned[/"unsigned-tx.json<br/>(digest only)"/]
+        Signed[/"signed-tx.json<br/>(64-byte ed25519 sig)"/] --> BroadcastCmd
+    end
 
-* **True Cold Storage:** Your private key *never* leaves the offline machine.
-* **Versioned Transactions:** Fully compatible with modern Solana standards (Address Lookup Tables, etc.).
-* **Visual Verification:** The offline signer decodes and displays the transaction details (Amount, Recipient, Network) before asking for confirmation.
-* **Hot/Cold Separation:** The `create-nonce` command separates the **Payer** (Hot Wallet) from the **Authority** (Cold Wallet), so you don't even need your private key to set up the account.
-* **Human-Readable Inputs:** Handles decimal calculations automatically to prevent "Raw Unit" errors.
+    subgraph CHAIN["⛓️ Solana"]
+        Precompile["Ed25519 precompile<br/>Ed25519SigVerify1111…"]
+        VectorProg["Vector program<br/>DkKZTgUDgkqUu5tck69uQJKf1deNzSY7YcU8F47oLXPZ"]
+        StatePDA[("Vector PDA<br/>seed = ['vector', auth]<br/>{authority, seed, bumps}")]
+        VaultPDA[("Vault PDA<br/>seed = ['vault', auth]<br/>holds SOL + SPL ATAs")]
+        VectorProg -.owns.-> StatePDA
+        VectorProg -.signs CPI for.-> VaultPDA
+    end
 
----
+    Unsigned ==USB==> SignCmd
+    SignCmd --> Signed
+    Signed ==USB==> BroadcastCmd
+    BroadcastCmd --> Precompile
+    BroadcastCmd --> VectorProg
+    ConstructCmd -.read seed.-> StatePDA
+```
 
-## Installation
+### Per-transaction sequence
 
-### Option 1: Download Binary
-Download the latest executable for your OS from the [Releases Page](https://github.com/ChainflowSOL/offline-signing-cli/releases) (Linux, macOS, Windows).
-*No Node.js or dependencies required.*
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant Hot as Hot CLI (online)
+    participant RPC as Solana RPC
+    participant Cold as Cold CLI (offline)
+    participant Prog as Vector program
 
-### Option 2: Build from Source
+    U->>Hot: sol-transfer --cold X --recipient Y --amount Z
+    Hot->>RPC: fetch Vector PDA seed
+    RPC-->>Hot: current seed
+    Hot->>Hot: digest = sha256(seed ‖ ACTION ‖ sub_ix)
+    Hot-->>U: unsigned-tx.json (digest)
+
+    Note over Hot,Cold: USB transfer →
+
+    U->>Cold: sign --keypair cold-wallet.json
+    Cold->>Cold: ed25519 sign(digest, cold_key)
+    Cold-->>U: signed-tx.json (signature)
+
+    Note over Cold,Hot: ← USB transfer
+
+    U->>Hot: broadcast
+    Hot->>Hot: nacl.verify(sig, digest, cold_pub) [defense]
+    Hot->>RPC: tx = [ed25519 precompile, vector execute]
+    RPC->>Prog: execute(ed25519_ix_index, sub_ix_data)
+    Prog->>Prog: load precompile from instructions sysvar
+    Prog->>Prog: check pubkey == authority<br/>check message == sha256(seed ‖ ACTION ‖ sub_ix)
+    Prog->>Prog: invoke_signed sub-instructions<br/>(vault PDA signs)
+    Prog->>Prog: seed ← sha256(seed ‖ digest)
+    Prog-->>RPC: ok
+    RPC-->>Hot: tx signature + confirmation
+    Hot-->>U: explorer link
+```
+
+### PDAs per authority
+
+| PDA          | Seeds                       | Owner          | Holds          |
+|--------------|-----------------------------|----------------|----------------|
+| **Vector**   | `["vector", authority]`     | this program   | state (authority, hashchain seed, bumps) |
+| **Vault**    | `["vault",  authority]`     | System program | SOL + SPL ATAs |
+
+State and value are split because `SystemProgram.transfer` rejects a `from`
+account that carries data — so SOL must live on a system-owned PDA.
+
+## Replay protection (hashchain)
+
+Each `execute` advances the on-chain seed:
+
+```
+digest      = SHA-256(seed || ACTION_EXECUTE || sub_ix_data)
+new_seed    = SHA-256(seed || digest)
+```
+
+A pre-signed digest is bound to the seed it was computed against. Once the
+seed advances, the old signature can never be replayed.
+
+`close` uses the same scheme with `ACTION_CLOSE || close_to_pubkey`.
+
+## On-chain program (Anchor)
+
+Located at `programs/vector/`. Three instructions:
+
+| Instruction  | Inputs                                     | Effect |
+|--------------|--------------------------------------------|--------|
+| `initialize` | —                                          | Creates state PDA; records initial seed from clock |
+| `execute`    | `ed25519_ix_index: u8`, `sub_ix_data: Vec<u8>` | Verifies precompile, CPI-executes each sub-instruction with the Vault PDA as signer, advances seed |
+| `close`      | `ed25519_ix_index: u8`                     | Verifies precompile, drains Vault to `close_to`, closes state PDA |
+
+Sub-instruction wire format (consumed by `execute`):
+
+```
+[u8 num_ixs]
+per ix:
+  [Pubkey program_id (32B)]
+  [u8 num_accounts]
+  per account:
+    [Pubkey (32B)]
+    [u8 flags]   bit0 = is_writable, bit1 = is_signer
+  [u16 LE data_len]
+  [data]
+```
+
+Only the Vault PDA may be marked `is_signer` — the program signs CPIs with
+the vault seeds via `invoke_signed`.
+
+## CLI commands
+
+```
+offline-signer <command> [options] [--env devnet|mainnet|<rpc-url>]
+```
+
+| Command             | Use on  | Description                                         |
+|---------------------|---------|-----------------------------------------------------|
+| `init-authority`    | Hot     | Initialize Vector + Vault PDAs for a cold pubkey    |
+| `sol-transfer`      | Hot     | Build an unsigned SOL transfer                      |
+| `token-transfer`    | Hot     | Build an unsigned SPL-token transfer                |
+| `close-authority`   | Hot     | Build an unsigned close                             |
+| `sign`              | **Cold**| Sign the digest in `unsigned-tx.json`               |
+| `broadcast`         | Hot     | Assemble `[Ed25519 precompile, vector ix]` and send |
+
+### Typical flow
+
 ```bash
-# 1. Clone
-gh repo clone ChainflowSOL/offline-signing-cli
-cd offline-signer-toolkit
+# 1. Hot side: provision PDAs for the cold pubkey.
+offline-signer init-authority \
+  --env devnet \
+  --cold <COLD_PUBKEY> \
+  --payer ./hot-wallet.json
 
-# 2. Install
+# Fund the Vault PDA (printed by init-authority) with SOL/SPL tokens.
+
+# 2. Hot side: prepare an unsigned transfer.
+offline-signer sol-transfer \
+  --env devnet \
+  --cold <COLD_PUBKEY> \
+  --recipient <RECIPIENT_PUBKEY> \
+  --amount 0.5 \
+  --payer <HOT_PUBKEY>
+
+# → writes unsigned-tx.json
+
+# 3. Move unsigned-tx.json to the OFFLINE machine. Cold side:
+offline-signer sign \
+  --keypair ./cold-wallet.json \
+  --unsigned ./unsigned-tx.json
+
+# → writes signed-tx.json (a 64-byte Ed25519 signature over the digest)
+
+# 4. Move signed-tx.json back to the ONLINE machine. Hot side:
+offline-signer broadcast \
+  --env devnet \
+  --payer ./hot-wallet.json \
+  --unsigned ./unsigned-tx.json \
+  --signature ./signed-tx.json
+```
+
+## Setup
+
+```bash
 pnpm install
-
-# 3. Build (Generates binaries in dist/executables/)
-pnpm build
+anchor build          # builds the on-chain program (target/deploy/vector.so)
+anchor test           # runs the integration tests against solana-test-validator
 ```
-> **Build Note:** You may see "Cannot resolve" warnings during the build process. These are false positives caused by `pkg` analyzing the minified bundle. If the build completes successfully, these can be safely ignored.
----
 
-## Prerequisites & Dependencies
+### Toolchain
 
-To run or build this tool from source, you will need the following installed on your system:
+| Tool          | Version tested |
+|---------------|----------------|
+| anchor        | 0.32.1         |
+| solana CLI    | 3.0.13 (Agave) |
+| rustc (host)  | 1.89.0         |
+| rustc (SBPF)  | 1.84.1 (platform-tools v1.51) |
+| node          | 18+            |
+| pnpm          | 10+            |
 
-### System Requirements
-* **Node.js (v18 or higher):** [Download Here](https://nodejs.org/)
-* **pnpm:** The package manager used for this repo.
-    ```bash
-    npm install -g pnpm
-    ```
-* **Git:** To clone the repository.
+The `Cargo.lock` pins `proc-macro-crate`, `indexmap`, and
+`unicode-segmentation` to versions compatible with platform-tools v1.51's
+bundled cargo 1.84. Upgrade pins when newer platform-tools ship.
 
-### Libraries & Tech Stack
+## Deploying the program
 
-* **[tweetnacl](https://github.com/dchest/tweetnacl-js):** Implements the **Ed25519** signature scheme. This is the cryptographic engine used to securely sign transactions offline without exposing private keys.
-* **[@solana/web3.js](https://github.com/solana-labs/solana-web3.js):** Standard library for Solana blockchain interaction.
-* **[@solana/spl-token](https://github.com/solana-labs/solana-program-library):** Handles all SPL Token transfers.
-* **[Commander.js](https://github.com/tj/commander.js):** Manages command-line arguments and sub-commands.
-* **[Chalk (v4)](https://github.com/chalk/chalk):** Terminal styling.
-    > ⚠️ **Dev Note:** We strictly use **Chalk v4.1.2** to ensure compatibility with the `pkg` binary compiler (v5+ is ESM-only).
-* **[pkg](https://github.com/vercel/pkg):** Compiles the project into standalone executables.
-* **[esbuild](https://github.com/evanw/esbuild):** Bundles TypeScript for fast compilation.
-
----
-## The Workflow
-
-This tool is designed to be run in a 3-step process that moves between your internet-connected (online) and air-gapped (offline) machines.
-
-
-### One-Time Setup (Online)
-
-Before you can use the tool, you need a Durable Nonce account.
-
-* **Payer:** A hot wallet on your online machine.
-* **Authority:** The Public Key of your Cold Wallet.
-
-<details open>
-<summary>Linux</summary>
-
-  ```bash
-  ./offline-signer-cli-linux create-nonce \
-    --env devnet \
-    --payer <path/to/hot-wallet.json> \
-    --authority "<COLD_WALLET_PUBKEY>"
-  ```
-</details>
-
-<details>
-<summary>macOS</summary>
-
-  ```bash
-  ./offline-signer-cli-macos create-nonce \
-    --env devnet \
-    --payer <path/to/hot-wallet.json> \
-    --authority "<COLD_WALLET_PUBKEY>"
-  ```
-</details>
-
-* **Result:** A `nonceAddress.json` file is saved. Keep the address safe.
-
-### Step 1: Construct (Online)
-
-On your **online** machine, run the `sol-transfer` or `token-transfer` command to build your transaction. This creates the `unsigned-tx.json` file.
-
-*For SOL Transfer:*
-
-<details open>
-  <summary>Linux</summary>
-  
-```bash
-./offline-signer-cli-linux sol-transfer \
-  --env devnet \
-  --sender "<COLD_WALLET_PUBKEY>" \
-  --recipient "<RECIPIENT_PUBKEY>" \
-  --amount 0.1 \
-  --nonce "<NONCE_ACCOUNT_PUBKEY>"
-```
-</details>
-
-<details>
-  <summary>macOS</summary>
-  
-```bash
-./offline-signer-cli-macos sol-transfer \
-  --env devnet \
-  --sender "<COLD_WALLET_PUBKEY>" \
-  --recipient "<RECIPIENT_PUBKEY>" \
-  --amount 0.1 \
-  --nonce "<NONCE_ACCOUNT_PUBKEY>"
-```
-</details>
-
-*For Token Transfer:*
-<details open>
-<summary>Linux</summary>
+The repo ships a dev program ID
+(`DkKZTgUDgkqUu5tck69uQJKf1deNzSY7YcU8F47oLXPZ`) baked into both
+`declare_id!()` and `Anchor.toml`. For your own deployment:
 
 ```bash
-./offline-signer-cli-linux token-transfer \
-  --env devnet \
-  --sender "<COLD_WALLET_PUBKEY>" \
-  --recipient "<RECIPIENT_PUBKEY>" \
-  --mint "<TOKEN_MINT_ADDRESS>" \
-  --amount 0.1 \
-  --nonce "<NONCE_ACCOUNT_PUBKEY>"
-```
-</details>
+# Generate a fresh program keypair
+solana-keygen new --no-bip39-passphrase -o target/deploy/vector-keypair.json --force
 
-<details>
-<summary>macOS</summary>
+# Sync the new pubkey into declare_id!() and Anchor.toml
+anchor keys sync
+
+# Update src/utils/vector.ts → VECTOR_PROGRAM_ID to the new value
+
+anchor build
+anchor deploy --provider.cluster devnet
+```
+
+## Tests
 
 ```bash
-./offline-signer-cli-macos token-transfer \
-  --env devnet \
-  --sender "<COLD_WALLET_PUBKEY>" \
-  --recipient "<RECIPIENT_PUBKEY>" \
-  --mint "<TOKEN_MINT_ADDRESS>" \
-  --amount 0.1 \
-  --nonce "<NONCE_ACCOUNT_PUBKEY>"
+anchor test
 ```
-</details>
 
-* **Result:** `unsigned-tx.json` is created.
-* **Note:** Copy `unsigned-tx.json` file to your air-gapped machine via USB.
+Covers: initialize, SOL transfer happy path, replay rejection, SPL-token
+transfer via CPI, close (with vault drain), wrong-signer rejection,
+tampered-digest rejection, missing-precompile rejection.
 
-### Step 2: Sign (Offline)
-On your **air-gapped** machine, run the `sign` command. It will read your keypair and the unsigned transaction, and create a new file with the signature.
+## Security notes
 
-<details open>
-<summary>Linux</summary>
-  
-```bash
-./offline-signer-cli-linux sign \
-  --keypair <path/to/cold-wallet.json> \
-  --unsigned <path/to/unsigned-tx.json>
-```
-</details>
+- Cold wallet only signs 32-byte digests. It never produces a Solana
+  transaction signature and is never asked to sign a blockhash.
+- The on-chain program rejects any Ed25519 precompile that uses
+  cross-instruction data references — all signature/pubkey/message bytes
+  must live inside the precompile's own instruction data.
+- The program enforces exactly one signature per precompile instruction.
+- `is_signer = true` is allowed in sub-instructions only for the Vault PDA;
+  any other signer would require a tx-level signature the cold wallet cannot
+  provide.
+- The hashchain initial seed mixes the slot and unix_timestamp from `Clock`
+  so a close-and-reinit cycle cannot resurrect an old pre-signed digest.
 
-<details>
-<summary>macOS</summary>
-  
-```bash
-./offline-signer-cli-macos sign \
-  --keypair <path/to/cold-wallet.json> \
-  --unsigned <path/to/unsigned-tx.json>
-```
-</details>
-
-* **Result:** `signed-tx.json` is created.
-* **Note:** Copy `signed-tx.json` file back to your online machine.
-
-### Step 3: Broadcast (Online)
-On your **online** machine, run the `broadcast` command. It will read the original message and the new signature, combine them, and send the transaction.
-
-<details open>
-<summary>Linux</summary>
-  
-```bash
-./offline-signer-cli-linux broadcast \
-  --env devnet \
-  --unsigned <path/to/unsigned-tx.json> \
-  --signature <path/to/signed-tx.json>
-```
-  </details>
-  
-<details>
-<summary>macOS</summary>
-  
-```bash
-./offline-signer-cli-macos broadcast \
-  --env devnet \
-  --unsigned <path/to/unsigned-tx.json> \
-  --signature <path/to/signed-tx.json>
-```
-  </details>
-  
-* **Result:** Prints the final Transaction Signature and Explorer link.
----
-
-## Command Reference
-
-### Global Flags
-* `--env`: (Alias: `-e`) Target network (devnet or mainnet). (Default: *devnet*)
-
-### `create-nonce`
-Creates a new Durable Nonce account.
-* `--payer <path>`: (Alias: `-p`) Path to the Hot Wallet keypair (pays the rent).
-* `--authority <path>`: (Alias: `-a`) **Public Key** of the Cold Wallet (will control the nonce).
-
-### `sol-transfer`
-Constructs an unsigned SOL transfer.
-* `--sender <pubkey>`: (Alias: `-s`) Sender public key (your cold wallet).
-* `--recipient <pubkey>`: (Alias: `-r`) Recipient public key.
-* `--amount <number>`: (Alias: `-a`) Amount of SOL to send.
-* `--nonce <pubkey>`: (Alias: `-n`) Your nonce account public key.
-
-### `token-transfer`
-Constructs an unsigned SPL Token transfer.
-* `--sender <pubkey>`: (Alias: `-s`) Sender public key (your cold wallet).
-* `--recipient <pubkey>`: (Alias: `-r`) Recipient's main public key.
-* `--mint <pubkey>`: (Alias: `-m`) The mint address of the token.
-* `--amount <number>`: (Alias: `-a`) Amount of tokens (raw units).
-* `--nonce <pubkey>`: (Alias: `-n`) Your nonce account public key.
-* `--fee-payer <pubkey>`: (Alias: `-f`) **Optional.** The key to pay fees. (Default: *sender*)
-
-### `sign`
-Signs an unsigned transaction message on an offline machine.
-* `--unsigned <path>`: (Alias: `-u`) Path to the `unsigned-tx.json` file. (Default: *./unsigned-tx.json*)
-* `--keypair <path>`: (Alias: `-k`) Path to your cold wallet keypair(JSON). (Default: *./cold-wallet.json*)
-
-### `broadcast`
-Broadcasts a signed transaction to the network.
-* `--unsigned <path>`: (Alias: `-u`) Path to the original `unsigned-tx.json` file. (Default: *./unsigned-tx.json*)
-* `--signature <path>`: (Alias: `-s`) Path to the `signature.json` file. (Default: *./signed-tx.json*)
-
----
-
-## Contributing
-
-Contributions are welcome! If you are looking for ideas on where to start, we are currently looking for:
-
-* **New Commands:** Staking (`stake`), Vote Accounts, and Governance proposals.
-
-### How to Contribute
-1.  **Fork** the repository.
-2.  **Clone** your fork locally.
-3.  **Create a branch** for your feature (`git checkout -b feature/new-command`).
-4.  **Commit** your changes (`git commit -m 'feat: added staking support'`).
-5.  **Push** to the branch (`git push origin feature/new-command`).
-6.  Open a **Pull Request**.
-
----
-
-## Contact & Support
-
-If you encounter any issues or unexpected behavior, please check the [Issue Tracker](https://github.com/ChainflowSOL/offline-signing-cli/issues) to see if it has already been reported. If not, please open a new issue.
-
-For direct inquiries or feedback, reach out to us on X: **[@ChainflowSOL](https://x.com/ChainflowSOL)**
