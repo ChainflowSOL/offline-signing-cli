@@ -1,60 +1,219 @@
-import { Connection, VersionedTransaction, VersionedMessage, PublicKey } from '@solana/web3.js';
+import {
+  Connection,
+  Keypair,
+  MessageV0,
+  PublicKey,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
+} from "@solana/web3.js";
+import {
+  createAssociatedTokenAccountInstruction,
+  getAssociatedTokenAddress,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import * as fs from "fs";
+import nacl from "tweetnacl";
 import { getConnection } from "../utils/connection";
-import { loadJson, UnsignedTxJson } from "../utils/io";
+import {
+  deserializeInstruction,
+  loadJson,
+  SignedTxJson,
+  UnsignedTxJson,
+  VectorExecuteTxV1,
+  VectorCloseTxV1,
+} from "../utils/io";
+import {
+  buildCloseInstruction,
+  buildEd25519PrecompileInstruction,
+  buildExecuteInstruction,
+  encodeSubInstructions,
+} from "../utils/vector";
+
+function loadKeypair(p: string): Keypair {
+  if (!fs.existsSync(p)) throw new Error(`Keypair file not found: ${p}`);
+  return Keypair.fromSecretKey(
+    new Uint8Array(JSON.parse(fs.readFileSync(p, "utf-8")))
+  );
+}
 
 export async function broadcast(
-    env: string, 
-    unsignedPath: string, 
-    signaturePath: string
-) {
-    console.log(`\nBroadcasting Transaction on ${env.toUpperCase()}...`);
+  env: string,
+  unsignedPath: string,
+  signedPath: string,
+  payerKeypairPath?: string
+): Promise<void> {
+  if (!payerKeypairPath) {
+    throw new Error("--payer <hot-wallet.json> is required.");
+  }
 
-    const connection: Connection = getConnection(env);
+  const connection = getConnection(env);
+  const unsigned = loadJson<UnsignedTxJson>(unsignedPath);
+  const signed = loadJson<SignedTxJson>(signedPath);
 
-    // 1. Load Message
-    const unsignedData: UnsignedTxJson = loadJson<UnsignedTxJson>(unsignedPath);
-    const messageBuffer = Buffer.from(unsignedData.messageBase64, 'base64');
-    const messageV0: VersionedMessage = VersionedMessage.deserialize(messageBuffer);
-
-    // 2. Load Signature
-    const signatureData = JSON.parse(fs.readFileSync(signaturePath, 'utf-8'));
-    const signatureBuffer = Buffer.from(signatureData.signature, 'base64');
-    const signerPubkey: PublicKey = new PublicKey(signatureData.publicKey);
-
-    console.log(`  Signer: ${signerPubkey.toBase58()}`);
-
-    // 3. Create Versioned Transaction
-    const transaction: VersionedTransaction = new VersionedTransaction(messageV0);
-
-    // 4. Insert Signature
-    const signerIndex: number = messageV0.staticAccountKeys.findIndex(key => 
-        key.equals(signerPubkey)
+  if (unsigned.version !== "vector-v1" || signed.version !== "vector-v1") {
+    throw new Error("Both files must be version 'vector-v1'.");
+  }
+  if (unsigned.action !== signed.action) {
+    throw new Error(
+      `Action mismatch: unsigned=${unsigned.action}, signed=${signed.action}`
     );
+  }
+  if (unsigned.coldAddress !== signed.coldAddress) {
+    throw new Error("coldAddress mismatch between unsigned and signed files.");
+  }
 
-    if (signerIndex === -1) {
-        console.error("Error: The signature provided does not belong to any account required by this transaction.");
-        process.exit(1);
+  const payer = loadKeypair(payerKeypairPath);
+  if (payer.publicKey.toBase58() !== unsigned.feePayer) {
+    throw new Error(
+      `Payer keypair (${payer.publicKey.toBase58()}) does not match feePayer ` +
+        `recorded in unsigned-tx.json (${unsigned.feePayer}).`
+    );
+  }
+
+  const authority = new PublicKey(unsigned.coldAddress);
+  const digest = Buffer.from(unsigned.digestBase64, "base64");
+  const signature = Buffer.from(signed.signatureBase64, "base64");
+
+  // Sanity-check the signature before paying for a doomed tx.
+  const sigOk = nacl.sign.detached.verify(
+    digest,
+    signature,
+    authority.toBytes()
+  );
+  if (!sigOk) {
+    throw new Error(
+      "Signature does not verify against the digest and cold pubkey. " +
+        "Refusing to broadcast."
+    );
+  }
+
+  const precompileIx = buildEd25519PrecompileInstruction(
+    authority.toBuffer(),
+    signature,
+    digest
+  );
+
+  let instructions: TransactionInstruction[];
+  if (unsigned.action === "execute") {
+    instructions = await buildExecuteIxs(
+      connection,
+      unsigned,
+      authority,
+      precompileIx,
+      payer.publicKey
+    );
+  } else {
+    instructions = buildCloseIxs(unsigned, authority, precompileIx);
+  }
+
+  const { blockhash } = await connection.getLatestBlockhash("confirmed");
+  const messageV0: MessageV0 = new TransactionMessage({
+    payerKey: payer.publicKey,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message();
+
+  const tx = new VersionedTransaction(messageV0);
+  tx.sign([payer]);
+
+  console.log(`\nBroadcasting on ${env.toUpperCase()}...`);
+  console.log(`  Action: ${unsigned.action}`);
+  console.log(`  Authority: ${authority.toBase58()}`);
+  console.log(`  Payer:     ${payer.publicKey.toBase58()}`);
+
+  const txid = await connection.sendTransaction(tx, {
+    skipPreflight: false,
+    preflightCommitment: "confirmed",
+  });
+  console.log(`\nSent! ${txid}`);
+  console.log(`https://explorer.solana.com/tx/${txid}?cluster=${env}`);
+  await connection.confirmTransaction(txid, "confirmed");
+  console.log("Confirmed.");
+}
+
+async function buildExecuteIxs(
+  connection: Connection,
+  unsigned: VectorExecuteTxV1,
+  authority: PublicKey,
+  precompileIx: TransactionInstruction,
+  payer: PublicKey
+): Promise<TransactionInstruction[]> {
+  const subIxs = unsigned.subInstructions.map(deserializeInstruction);
+  const subIxData = encodeSubInstructions(subIxs);
+
+  // Hot-wallet-side pre-instructions: ensure destination ATAs exist for any
+  // SPL token transfers. These are NOT in the signed digest — they're
+  // fee-payer concerns. We pay rent and the tx still requires the cold sig.
+  const preIxs: TransactionInstruction[] = [];
+  for (const sub of subIxs) {
+    if (!sub.programId.equals(TOKEN_PROGRAM_ID)) continue;
+    if (sub.data.length === 0 || sub.data[0] !== 3) continue; // 3 = Transfer
+    if (sub.keys.length < 2) continue;
+    const sourceMeta = sub.keys[0];
+    const destMeta = sub.keys[1];
+    if (!sourceMeta || !destMeta) continue;
+    const destAta = destMeta.pubkey;
+    const info = await connection.getAccountInfo(destAta);
+    if (info) continue;
+
+    // Derive recipient + mint by inspecting the source ATA on-chain.
+    const sourceAta = sourceMeta.pubkey;
+    const sourceInfo = await connection.getAccountInfo(sourceAta);
+    if (!sourceInfo) {
+      throw new Error(
+        `Source ATA ${sourceAta.toBase58()} missing — cannot infer mint for dest ATA pre-create.`
+      );
     }
-
-    transaction.signatures[signerIndex] = signatureBuffer;
-
-    // 5. Send
-    try {
-        const txid = await connection.sendTransaction(transaction, {
-            skipPreflight: false,
-            preflightCommitment: 'confirmed'
-        });
-
-        console.log(`\nTransaction Sent!`);
-        console.log(`Explorer: https://explorer.solana.com/tx/${txid}?cluster=${env}`);
-        
-        await connection.confirmTransaction(txid);
-        console.log("  Confirmed.");
-
-    } catch (err: any) {
-        console.error("\nBroadcast Failed:");
-        if (err) console.error(err);
-        else console.error(err);
+    // SPL Token v0 Account layout: bytes 0..32 = mint, 32..64 = owner.
+    const mint = new PublicKey(sourceInfo.data.slice(0, 32));
+    // We can't reverse a recipient pubkey from destAta cheaply, but we don't
+    // need to: createAssociatedTokenAccountInstruction takes the owner.
+    // We require the owner to round-trip-check the ATA derivation.
+    // Try each meta to find one whose ATA(mint, key) == destAta.
+    let owner: PublicKey | null = null;
+    for (const k of sub.keys) {
+      const candidate = await getAssociatedTokenAddress(mint, k.pubkey);
+      if (candidate.equals(destAta)) {
+        owner = k.pubkey;
+        break;
+      }
+      const candidateOff = await getAssociatedTokenAddress(mint, k.pubkey, true);
+      if (candidateOff.equals(destAta)) {
+        owner = k.pubkey;
+        break;
+      }
     }
+    if (!owner) {
+      throw new Error(
+        `Destination ATA ${destAta.toBase58()} is missing and the owner cannot be ` +
+          `inferred from the sub-instruction accounts. Create the ATA manually first.`
+      );
+    }
+    preIxs.push(
+      createAssociatedTokenAccountInstruction(payer, destAta, owner, mint)
+    );
+  }
+
+  // Precompile must come BEFORE our execute ix. Index = preIxs.length.
+  const ed25519Index = preIxs.length;
+  const executeIx = buildExecuteInstruction(
+    authority,
+    ed25519Index,
+    subIxData,
+    subIxs
+  );
+
+  return [...preIxs, precompileIx, executeIx];
+}
+
+function buildCloseIxs(
+  unsigned: VectorCloseTxV1,
+  authority: PublicKey,
+  precompileIx: TransactionInstruction
+): TransactionInstruction[] {
+  const closeTo = new PublicKey(unsigned.closeTo);
+  // ed25519 ix is at index 0; close ix is at index 1.
+  const closeIx = buildCloseInstruction(authority, closeTo, 0);
+  return [precompileIx, closeIx];
 }

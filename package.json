@@ -11,23 +11,31 @@
     "build": "pnpm build:ts && pnpm build:bundle && pkg .",
     "start": "node dist/bundle.js",
     "dev": "ts-node src/index.ts",
-    "create_nonce": "ts-node src/commands/create_nonce.ts"
+    "anchor:build": "anchor build",
+    "anchor:test": "anchor test"
   },
   "keywords": [],
   "author": "",
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.14.0",
   "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
     "tweetnacl": "^1.0.3",
     "yargs": "^17.7.2"
   },
   "devDependencies": {
+    "@types/bn.js": "^5.1.6",
+    "@types/chai": "^4.3.20",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^24.8.1",
     "@types/yargs": "^17.0.33",
+    "chai": "^4.5.0",
     "esbuild": "^0.24.0",
+    "mocha": "^10.7.0",
     "pkg": "^5.8.1",
+    "ts-mocha": "^10.0.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   },

@@ -1,70 +1,73 @@
-import { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL, NonceAccount, TransactionInstruction, TransactionMessage, Connection, MessageV0 } from "@solana/web3.js";
+import {
+  LAMPORTS_PER_SOL,
+  PublicKey,
+  SystemProgram,
+  TransactionInstruction,
+} from "@solana/web3.js";
 import { getConnection } from "../utils/connection";
-import { saveJson, UnsignedTxJson } from "../utils/io";
+import { saveJson, serializeInstruction, VectorExecuteTxV1 } from "../utils/io";
+import {
+  digestExecute,
+  encodeSubInstructions,
+  fetchVectorAccount,
+  findVaultPda,
+  findVectorPda,
+} from "../utils/vector";
 
 export async function constructSolTransfer(
   env: string,
-  senderStr: string,
+  coldAddressStr: string,
   recipientStr: string,
-  nonceStr: string,
+  payerStr: string,
   amount: number
-) {
-  const connection: Connection = getConnection(env);
-  const sender: PublicKey = new PublicKey(senderStr);
-  const recipient: PublicKey = new PublicKey(recipientStr);
-  const noncePubkey: PublicKey = new PublicKey(nonceStr);
+): Promise<void> {
+  const connection = getConnection(env);
+  const authority = new PublicKey(coldAddressStr);
+  const recipient = new PublicKey(recipientStr);
+  const feePayer = new PublicKey(payerStr);
+  const [vectorPda] = findVectorPda(authority);
+  const [vaultPda] = findVaultPda(authority);
 
   console.log(`\nConstructing SOL Transfer on ${env.toUpperCase()}`);
-  console.log(`  From:   ${sender.toBase58()}`);
-  console.log(`  To:     ${recipient.toBase58()}`);
-  console.log(`  Amount: ${amount} SOL`);
+  console.log(`  Authority:   ${authority.toBase58()}`);
+  console.log(`  Vector PDA:  ${vectorPda.toBase58()}  (state)`);
+  console.log(`  Vault PDA:   ${vaultPda.toBase58()}  (source of funds)`);
+  console.log(`  Recipient:   ${recipient.toBase58()}`);
+  console.log(`  Fee Payer:   ${feePayer.toBase58()}`);
+  console.log(`  Amount:      ${amount} SOL`);
 
-  // 1. Fetch Nonce Data (This gets us the "Durable Blockhash")
-  console.log(`Fetching Nonce Hash from ${noncePubkey.toBase58()}...`);
-  const nonceInfo = await connection.getAccountInfo(noncePubkey);
-  
-  if (!nonceInfo) {
-      throw new Error(`Nonce account ${nonceStr} not found. Did you run create-nonce?`);
-  }
-  
-  const nonceAccount: NonceAccount = NonceAccount.fromAccountData(nonceInfo.data);
+  // Fetch current seed — the digest is bound to it for replay protection.
+  console.log(`\nFetching Vector seed...`);
+  const vectorAccount = await fetchVectorAccount(connection, authority);
 
-  // 2. Build Tx
-  const ix: TransactionInstruction[] = [];
-  ix.push(
-    // IMPORTANT: The "authorizedPubkey" must match your Cold Wallet
-    SystemProgram.nonceAdvance({
-      noncePubkey: noncePubkey,
-      authorizedPubkey: sender,
-    })
-  );
-  ix.push(
-    SystemProgram.transfer({
-        fromPubkey: sender,
-        toPubkey: recipient,
-        lamports: amount * LAMPORTS_PER_SOL
-    })
-  )
+  // Sub-instruction: SystemProgram.transfer signed by the Vault PDA.
+  const transferIx: TransactionInstruction = SystemProgram.transfer({
+    fromPubkey: vaultPda,
+    toPubkey: recipient,
+    lamports: Math.round(amount * LAMPORTS_PER_SOL),
+  });
 
-  // 3. Compile V0 Message
-  const messageV0: MessageV0 = new TransactionMessage({
-    payerKey: sender,
-    recentBlockhash: nonceAccount.nonce,
-    instructions: ix 
-  }).compileToV0Message();
+  const subIxs: TransactionInstruction[] = [transferIx];
+  const subIxData = encodeSubInstructions(subIxs);
+  const digest = digestExecute(vectorAccount.seed, subIxData);
 
-  // 4. Serialize & Save with Metadata
-  const payload: UnsignedTxJson = {
-    description: `Transfer ${amount} SOL to ${recipientStr.slice(0,6)}...`,
+  const payload: VectorExecuteTxV1 = {
+    version: "vector-v1",
+    action: "execute",
+    description: `Transfer ${amount} SOL to ${recipient.toBase58().slice(0, 8)}...`,
     network: env,
-    messageBase64: Buffer.from(messageV0.serialize()).toString("base64"),
+    coldAddress: authority.toBase58(),
+    feePayer: feePayer.toBase58(),
+    digestBase64: digest.toString("base64"),
+    subInstructions: subIxs.map(serializeInstruction),
     meta: {
       tokenSymbol: "SOL",
       decimals: 9,
-      amount
-    }
+      amount,
+      recipient: recipient.toBase58(),
+    },
   };
 
   saveJson("unsigned-tx.json", payload);
-  console.log(`\nNEXT STEP: Copy 'unsigned-tx.json' to your OFFLINE machine.`);
+  console.log(`\nNEXT STEP: Copy 'unsigned-tx.json' to your OFFLINE machine and run 'sign'.`);
 }
