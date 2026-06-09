@@ -1,0 +1,150 @@
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::{
+    instruction::{AccountMeta, Instruction},
+    program::invoke_signed,
+};
+
+use crate::constants::*;
+use crate::error::VectorError;
+
+#[derive(Clone)]
+pub struct DecodedSubIx {
+    pub program_id: Pubkey,
+    pub accounts: Vec<SubAccount>,
+    pub data: Vec<u8>,
+}
+
+#[derive(Clone)]
+pub struct SubAccount {
+    pub pubkey: Pubkey,
+    pub is_writable: bool,
+    pub is_signer: bool,
+}
+
+// Wire format:
+//   [u8 num_ixs]
+//   per ix:
+//     [Pubkey program_id (32B)]
+//     [u8 num_accounts]
+//     per account:
+//       [Pubkey (32B)]
+//       [u8 flags]   bit0 = is_writable, bit1 = is_signer
+//     [u16 LE data_len]
+//     [data]
+pub fn decode_sub_instructions(data: &[u8]) -> Result<Vec<DecodedSubIx>> {
+    let mut cur = 0usize;
+    require!(!data.is_empty(), VectorError::SubIxDecodeError);
+    let num_ixs = data[cur] as usize;
+    cur += 1;
+
+    let mut out = Vec::with_capacity(num_ixs);
+    for _ in 0..num_ixs {
+        require!(cur + 32 <= data.len(), VectorError::SubIxDecodeError);
+        let program_id =
+            Pubkey::new_from_array(data[cur..cur + 32].try_into().unwrap());
+        cur += 32;
+
+        require!(cur + 1 <= data.len(), VectorError::SubIxDecodeError);
+        let num_accs = data[cur] as usize;
+        cur += 1;
+
+        let mut accounts = Vec::with_capacity(num_accs);
+        for _ in 0..num_accs {
+            require!(cur + 33 <= data.len(), VectorError::SubIxDecodeError);
+            let pk =
+                Pubkey::new_from_array(data[cur..cur + 32].try_into().unwrap());
+            let flags = data[cur + 32];
+            cur += 33;
+            accounts.push(SubAccount {
+                pubkey: pk,
+                is_writable: (flags & 0x01) != 0,
+                is_signer: (flags & 0x02) != 0,
+            });
+        }
+
+        require!(cur + 2 <= data.len(), VectorError::SubIxDecodeError);
+        let data_len = u16::from_le_bytes([data[cur], data[cur + 1]]) as usize;
+        cur += 2;
+
+        require!(cur + data_len <= data.len(), VectorError::SubIxDecodeError);
+        let ix_data = data[cur..cur + data_len].to_vec();
+        cur += data_len;
+
+        out.push(DecodedSubIx {
+            program_id,
+            accounts,
+            data: ix_data,
+        });
+    }
+    require!(cur == data.len(), VectorError::SubIxDecodeError);
+    Ok(out)
+}
+
+pub fn execute_sub_instructions(
+    sub_ixs: &[DecodedSubIx],
+    remaining: &[AccountInfo],
+    authority: &Pubkey,
+    vault_bump: u8,
+) -> Result<()> {
+    let (vault_pda, _) =
+        Pubkey::find_program_address(&[VAULT_SEED, authority.as_ref()], &crate::ID);
+    let signer_seeds: &[&[u8]] = &[VAULT_SEED, authority.as_ref(), &[vault_bump]];
+
+    let mut cursor = 0usize;
+    for sub_ix in sub_ixs {
+        // Program AccountInfo first.
+        require!(cursor < remaining.len(), VectorError::MissingAccount);
+        let program_ai = &remaining[cursor];
+        require!(
+            program_ai.key == &sub_ix.program_id,
+            VectorError::AccountMismatch
+        );
+        cursor += 1;
+
+        let mut metas = Vec::with_capacity(sub_ix.accounts.len());
+        let mut infos: Vec<AccountInfo> = Vec::with_capacity(sub_ix.accounts.len() + 1);
+        infos.push(program_ai.clone());
+
+        for sub_acc in &sub_ix.accounts {
+            require!(cursor < remaining.len(), VectorError::MissingAccount);
+            let acc_ai = &remaining[cursor];
+            require!(
+                acc_ai.key == &sub_acc.pubkey,
+                VectorError::AccountMismatch
+            );
+            cursor += 1;
+
+            // Only the Vault PDA can be a signer in a sub-instruction —
+            // its signature comes from invoke_signed below. Any other
+            // "is_signer = true" would require a tx-level signer for an
+            // account the cold wallet doesn't control.
+            if sub_acc.is_signer {
+                require!(
+                    sub_acc.pubkey == vault_pda,
+                    VectorError::NonPdaSignerInSubIx
+                );
+            }
+
+            metas.push(AccountMeta {
+                pubkey: sub_acc.pubkey,
+                is_signer: sub_acc.is_signer,
+                is_writable: sub_acc.is_writable,
+            });
+            infos.push(acc_ai.clone());
+        }
+
+        let ix = Instruction {
+            program_id: sub_ix.program_id,
+            accounts: metas,
+            data: sub_ix.data.clone(),
+        };
+
+        invoke_signed(&ix, &infos, &[signer_seeds]).map_err(|e| {
+            msg!("Sub-instruction CPI failed: {:?}", e);
+            error!(VectorError::CpiFailed)
+        })?;
+    }
+
+    require!(cursor == remaining.len(), VectorError::ExtraAccounts);
+    Ok(())
+}
