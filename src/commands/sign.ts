@@ -53,7 +53,16 @@ export async function signOffline(
   }
 
   if (tx.action === "execute") {
-    if (tx.meta) {
+    if (tx.meta?.stakeAction) {
+      console.log(`  Stake op:   ${tx.meta.stakeAction.toUpperCase()}`);
+      if (tx.meta.stakePubkey) console.log(`  Stake acct: ${tx.meta.stakePubkey}`);
+      if (tx.meta.stakeSeed) console.log(`  Stake seed: "${tx.meta.stakeSeed}"`);
+      if (tx.meta.validatorVotePubkey)
+        console.log(`  Validator:  ${tx.meta.validatorVotePubkey}`);
+      if (tx.meta.amount !== undefined)
+        console.log(`  Amount:     ${tx.meta.amount} ${tx.meta.tokenSymbol ?? "SOL"}`);
+      if (tx.meta.recipient) console.log(`  Recipient:  ${tx.meta.recipient}`);
+    } else if (tx.meta) {
       console.log(`  Amount:    ${tx.meta.amount} ${tx.meta.tokenSymbol}`);
       console.log(`  Recipient: ${tx.meta.recipient}`);
     } else {

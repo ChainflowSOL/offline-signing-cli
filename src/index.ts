@@ -16,6 +16,12 @@ import { initAuthority } from "./commands/init_authority";
 import { constructSolTransfer } from "./commands/sol_transfer";
 import { constructTokenTransfer } from "./commands/token_transfer";
 import { constructClose } from "./commands/close";
+import {
+  constructStakeCreate,
+  constructStakeDelegate,
+  constructStakeDeactivate,
+  constructStakeWithdraw,
+} from "./commands/stake";
 import { signOffline } from "./commands/sign";
 import { broadcast } from "./commands/broadcast";
 
@@ -73,6 +79,78 @@ yargs(hideBin(process.argv))
         argv.recipient as string,
         argv.mint as string,
         argv.amount as number,
+        argv.payer as string
+      )
+  )
+  .command(
+    "stake-create",
+    "Build an unsigned: vault-funded stake account creation (auths = Vault PDA)",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("seed", { alias: "s", type: "string", demandOption: true, description: "Seed string for the stake account address (derived from vault)" })
+        .option("amount", { alias: "a", type: "number", demandOption: true, description: "SOL to stake (incl. rent)" })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructStakeCreate(
+        argv.env as string,
+        argv.cold as string,
+        argv.seed as string,
+        argv.amount as number,
+        argv.payer as string
+      )
+  )
+  .command(
+    "stake-delegate",
+    "Build an unsigned delegate-to-validator instruction",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("stake", { alias: "s", type: "string", demandOption: true, description: "Stake account pubkey" })
+        .option("validator", { alias: "v", type: "string", demandOption: true, description: "Validator vote-account pubkey" })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructStakeDelegate(
+        argv.env as string,
+        argv.cold as string,
+        argv.stake as string,
+        argv.validator as string,
+        argv.payer as string
+      )
+  )
+  .command(
+    "stake-deactivate",
+    "Build an unsigned deactivate-stake instruction",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("stake", { alias: "s", type: "string", demandOption: true, description: "Stake account pubkey" })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructStakeDeactivate(
+        argv.env as string,
+        argv.cold as string,
+        argv.stake as string,
+        argv.payer as string
+      )
+  )
+  .command(
+    "stake-withdraw",
+    "Build an unsigned withdraw-from-stake instruction",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("stake", { alias: "s", type: "string", demandOption: true, description: "Stake account pubkey" })
+        .option("amount", { alias: "a", type: "number", demandOption: true, description: "SOL to withdraw" })
+        .option("recipient", { alias: "r", type: "string", demandOption: true })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructStakeWithdraw(
+        argv.env as string,
+        argv.cold as string,
+        argv.stake as string,
+        argv.amount as number,
+        argv.recipient as string,
         argv.payer as string
       )
   )

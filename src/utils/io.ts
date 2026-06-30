@@ -47,6 +47,11 @@ export interface TxMeta {
   decimals?: number;
   amount?: number;
   recipient?: string;
+  // Stake-specific (only set on stake-* commands).
+  stakeAction?: "create" | "delegate" | "deactivate" | "withdraw";
+  stakePubkey?: string;
+  validatorVotePubkey?: string;
+  stakeSeed?: string;
 }
 
 export interface VectorExecuteTxV1 {

@@ -147,6 +147,10 @@ offline-signer <command> [options] [--env devnet|mainnet|<rpc-url>]
 | `init-authority`    | Hot     | Initialize Vector + Vault PDAs for a cold pubkey    |
 | `sol-transfer`      | Hot     | Build an unsigned SOL transfer                      |
 | `token-transfer`    | Hot     | Build an unsigned SPL-token transfer                |
+| `stake-create`      | Hot     | Build an unsigned vault-funded stake-account create (auths = Vault PDA) |
+| `stake-delegate`    | Hot     | Build an unsigned delegate-to-validator             |
+| `stake-deactivate`  | Hot     | Build an unsigned deactivate-stake                  |
+| `stake-withdraw`    | Hot     | Build an unsigned withdraw-from-stake               |
 | `close-authority`   | Hot     | Build an unsigned close                             |
 | `sign`              | **Cold**| Sign the digest in `unsigned-tx.json`               |
 | `broadcast`         | Hot     | Assemble `[Ed25519 precompile, vector ix]` and send |
@@ -186,6 +190,75 @@ offline-signer broadcast \
   --unsigned ./unsigned-tx.json \
   --signature ./signed-tx.json
 ```
+
+### Institutional staking flow
+
+Every stake operation funnels through the same `execute` instruction — the
+cold wallet authorizes a `StakeProgram` sub-instruction signed by the Vault
+PDA via CPI. The cold key never sees a blockhash.
+
+| Concern | Where it lives |
+|---|---|
+| Funds | Vault PDA (`["vault", authority]`) |
+| Stake / withdraw authority on every stake account | Vault PDA |
+| Authorization to delegate / deactivate / withdraw | Cold-wallet Ed25519 signature over the digest |
+
+Stake account addresses are **derived** from the Vault PDA via
+`createAccountWithSeed`, so the same `--seed` string always produces the
+same stake address. Pick any naming convention (e.g. `"validator-A-2026Q2"`).
+
+```bash
+# 1. Vault funds + creates a stake account; both authorities = Vault PDA.
+offline-signer stake-create \
+  --env devnet \
+  --cold <COLD_PUBKEY> \
+  --seed "validator-A-2026Q2" \
+  --amount 100 \
+  --payer <HOT_PUBKEY>
+# → unsigned-tx.json   ... sign ... broadcast
+
+# 2. Delegate that stake to a validator's vote account.
+offline-signer stake-delegate \
+  --env devnet \
+  --cold <COLD_PUBKEY> \
+  --stake <STAKE_PUBKEY> \
+  --validator <VOTE_PUBKEY> \
+  --payer <HOT_PUBKEY>
+# → unsigned-tx.json   ... sign ... broadcast
+# Takes effect at the next epoch boundary.
+
+# 3. Start unwinding (deactivate); becomes withdrawable next epoch.
+offline-signer stake-deactivate \
+  --env devnet \
+  --cold <COLD_PUBKEY> \
+  --stake <STAKE_PUBKEY> \
+  --payer <HOT_PUBKEY>
+
+# 4. Withdraw inactive stake back to a recipient (e.g. the Vault PDA).
+offline-signer stake-withdraw \
+  --env devnet \
+  --cold <COLD_PUBKEY> \
+  --stake <STAKE_PUBKEY> \
+  --amount 100 \
+  --recipient <VAULT_PDA_OR_OTHER> \
+  --payer <HOT_PUBKEY>
+```
+
+**Notes for operators:**
+
+- Minimum delegation on most clusters is **1 SOL** above rent (≈ 0.00228 SOL
+  for a 200-byte stake account). `stake-create` with less will succeed but
+  `stake-delegate` will fail with Stake program error `0xc`
+  (`InsufficientDelegation`).
+- The cold-side `sign` UI decodes the `meta` and shows `Stake op`,
+  `Stake acct`, `Validator`, `Amount`, `Recipient` so the human at the keys
+  sees what they're authorizing.
+- Multiple stake accounts per authority: use a distinct `--seed` for each.
+  All inherit the Vault PDA as stake & withdraw authority, so one cold key
+  controls the whole portfolio.
+- Pre-signing: `signed-tx.json` produced offline is single-use (hashchain
+  replay protection). Useful for break-glass "deactivate everything"
+  procedures held in escrow.
 
 ## Setup
 
