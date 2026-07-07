@@ -34,7 +34,8 @@ signed-tx.json
 signature.json
 nonce-address.json
 vector-info.json
-smoke/
+# Keep the test scripts in smoke/, ignore only the throwaway cold keypair.
+smoke/cold-test.json
 
 # -----------------------------
 # OS / System Files
@@ -43,3 +44,4 @@ smoke/
 Thumbs.db
 *.log
 .claude
+audit
