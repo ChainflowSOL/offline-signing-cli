@@ -58,6 +58,7 @@ export async function constructSolTransfer(
     network: env,
     coldAddress: authority.toBase58(),
     feePayer: feePayer.toBase58(),
+    seedBase64: vectorAccount.seed.toString("base64"),
     digestBase64: digest.toString("base64"),
     subInstructions: subIxs.map(serializeInstruction),
     meta: {

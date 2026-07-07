@@ -1,8 +1,16 @@
-import { Keypair } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import * as fs from "fs";
 import * as readline from "readline";
 import nacl from "tweetnacl";
-import { loadJson, saveJson, SignedTxJson, UnsignedTxJson } from "../utils/io";
+import {
+  deserializeInstruction,
+  loadJson,
+  saveJson,
+  SignedTxJson,
+  UnsignedTxJson,
+} from "../utils/io";
+import { digestClose, digestExecute, encodeSubInstructions } from "../utils/vector";
+import { describeSubInstructions } from "../utils/describe";
 
 function loadColdKeypair(keypairPath: string): Keypair {
   if (!fs.existsSync(keypairPath)) {
@@ -52,38 +60,70 @@ export async function signOffline(
     process.exit(1);
   }
 
+  // ── Independently verify the digest BEFORE showing or signing anything ──
+  // The signer trusts nothing the (untrusted) producer wrote except the raw
+  // sub-instructions / closeTo, which it re-hashes with the public on-chain
+  // seed and compares byte-for-byte against the digest it is being asked to
+  // sign. This is what makes "what you see is what you sign" hold even when the
+  // producing (online) machine is compromised.
+  if (typeof tx.seedBase64 !== "string" || tx.seedBase64.length === 0) {
+    throw new Error(
+      "Unsigned tx is missing 'seedBase64'. Regenerate it with an up-to-date CLI; " +
+        "this signer refuses to blind-sign an opaque digest."
+    );
+  }
+  const seed = Buffer.from(tx.seedBase64, "base64");
+  if (seed.length !== 32) {
+    throw new Error(`seed must be 32 bytes; got ${seed.length}.`);
+  }
+
+  let expected: Buffer;
+  let actionLines: string[];
   if (tx.action === "execute") {
-    if (tx.meta?.stakeAction) {
-      console.log(`  Stake op:   ${tx.meta.stakeAction.toUpperCase()}`);
-      if (tx.meta.stakePubkey) console.log(`  Stake acct: ${tx.meta.stakePubkey}`);
-      if (tx.meta.stakeSeed) console.log(`  Stake seed: "${tx.meta.stakeSeed}"`);
-      if (tx.meta.validatorVotePubkey)
-        console.log(`  Validator:  ${tx.meta.validatorVotePubkey}`);
-      if (tx.meta.amount !== undefined)
-        console.log(`  Amount:     ${tx.meta.amount} ${tx.meta.tokenSymbol ?? "SOL"}`);
-      if (tx.meta.recipient) console.log(`  Recipient:  ${tx.meta.recipient}`);
-    } else if (tx.meta) {
-      console.log(`  Amount:    ${tx.meta.amount} ${tx.meta.tokenSymbol}`);
-      console.log(`  Recipient: ${tx.meta.recipient}`);
-    } else {
-      console.log(`  Description: ${tx.description}`);
-    }
+    const subIxs = tx.subInstructions.map(deserializeInstruction);
+    expected = digestExecute(seed, encodeSubInstructions(subIxs));
+    actionLines = [
+      "  Action: EXECUTE the following sub-instruction(s):",
+      ...describeSubInstructions(subIxs),
+    ];
   } else {
-    console.log(`  Close-to (rent destination): ${tx.closeTo}`);
+    const closeTo = new PublicKey(tx.closeTo);
+    expected = digestClose(seed, closeTo);
+    actionLines = [
+      "  Action: CLOSE the Vector account.",
+      "        -> drains the ENTIRE vault balance + state-account rent to:",
+      `           ${closeTo.toBase58()}`,
+    ];
+  }
+
+  const claimed = Buffer.from(tx.digestBase64, "base64");
+  if (claimed.length !== 32 || !expected.equals(claimed)) {
+    console.error(
+      "\nREFUSING TO SIGN: the digest in this file does not match its own instructions."
+    );
+    console.error(`  recomputed (from instructions): ${expected.toString("base64")}`);
+    console.error(`  digest in file:                 ${tx.digestBase64}`);
+    console.error(
+      "  The file was tampered with, targets a different on-chain seed, or came " +
+        "from an incompatible tool. Nothing signed."
+    );
+    process.exit(1);
+  }
+
+  for (const line of actionLines) console.log(line);
+  if (tx.description) {
+    console.log("  ---");
+    console.log(`  Producer label (UNVERIFIED): ${tx.description}`);
   }
   console.log("---------------------------------------------------------");
 
-  if (!(await confirm('\nCONFIRM: type "yes" to sign: '))) {
+  if (!(await confirm('\nCONFIRM: type "yes" to sign the action shown above: '))) {
     console.log("\nABORTED. Nothing signed.");
     return;
   }
 
-  const digest = Buffer.from(tx.digestBase64, "base64");
-  if (digest.length !== 32) {
-    throw new Error(`Digest must be 32 bytes; got ${digest.length}.`);
-  }
-
-  const signature = nacl.sign.detached(digest, keypair.secretKey);
+  // Sign the digest we recomputed ourselves (== the verified `claimed`).
+  const signature = nacl.sign.detached(expected, keypair.secretKey);
 
   const signed: SignedTxJson = {
     version: "vector-v1",

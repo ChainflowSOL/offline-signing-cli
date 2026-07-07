@@ -31,6 +31,7 @@ export async function constructClose(
     network: env,
     coldAddress: authority.toBase58(),
     feePayer: feePayer.toBase58(),
+    seedBase64: seed.toString("base64"),
     digestBase64: digest.toString("base64"),
     closeTo: closeTo.toBase58(),
   };

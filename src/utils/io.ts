@@ -61,8 +61,14 @@ export interface VectorExecuteTxV1 {
   network: string;
   coldAddress: string;
   feePayer: string;
+  // Public on-chain hashchain seed the digest was computed against. Included
+  // so the OFFLINE signer can independently recompute and verify the digest
+  // from `subInstructions` — the signer never has network access.
+  seedBase64: string;
   digestBase64: string;
   subInstructions: SerializedInstruction[];
+  // Advisory only. The signer does NOT trust `meta`; it renders the action it
+  // is about to sign by decoding `subInstructions` (which are digest-bound).
   meta?: TxMeta;
 }
 
@@ -73,6 +79,8 @@ export interface VectorCloseTxV1 {
   network: string;
   coldAddress: string;
   feePayer: string;
+  // See VectorExecuteTxV1.seedBase64.
+  seedBase64: string;
   digestBase64: string;
   closeTo: string;
 }
