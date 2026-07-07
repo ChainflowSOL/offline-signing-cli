@@ -157,7 +157,7 @@ async function buildExecuteIxs(
     const info = await connection.getAccountInfo(destAta);
     if (info) continue;
 
-    // Derive recipient + mint by inspecting the source ATA on-chain.
+    // Derive the mint by inspecting the source ATA on-chain.
     const sourceAta = sourceMeta.pubkey;
     const sourceInfo = await connection.getAccountInfo(sourceAta);
     if (!sourceInfo) {
@@ -165,33 +165,31 @@ async function buildExecuteIxs(
         `Source ATA ${sourceAta.toBase58()} missing — cannot infer mint for dest ATA pre-create.`
       );
     }
-    // SPL Token v0 Account layout: bytes 0..32 = mint, 32..64 = owner.
+    // SPL Token Account layout: bytes 0..32 = mint.
     const mint = new PublicKey(sourceInfo.data.slice(0, 32));
-    // We can't reverse a recipient pubkey from destAta cheaply, but we don't
-    // need to: createAssociatedTokenAccountInstruction takes the owner.
-    // We require the owner to round-trip-check the ATA derivation.
-    // Try each meta to find one whose ATA(mint, key) == destAta.
-    let owner: PublicKey | null = null;
-    for (const k of sub.keys) {
-      const candidate = await getAssociatedTokenAddress(mint, k.pubkey);
-      if (candidate.equals(destAta)) {
-        owner = k.pubkey;
-        break;
-      }
-      const candidateOff = await getAssociatedTokenAddress(mint, k.pubkey, true);
-      if (candidateOff.equals(destAta)) {
-        owner = k.pubkey;
-        break;
-      }
-    }
-    if (!owner) {
+
+    // The recipient (ATA owner) is NOT one of the transfer's accounts — those
+    // are [source ATA, dest ATA, authority]. It only exists implicitly as
+    // destAta = getAssociatedTokenAddress(mint, recipient). Recover it from the
+    // (untrusted) meta.recipient and round-trip-verify the derivation, so a
+    // tampered meta.recipient can only cause a clean skip, never a wrong ATA.
+    const recipientStr = unsigned.meta?.recipient;
+    if (!recipientStr) {
       throw new Error(
-        `Destination ATA ${destAta.toBase58()} is missing and the owner cannot be ` +
-          `inferred from the sub-instruction accounts. Create the ATA manually first.`
+        `Destination ATA ${destAta.toBase58()} does not exist and unsigned-tx.json has no ` +
+          `meta.recipient to derive its owner. Create the ATA manually first.`
+      );
+    }
+    const recipient = new PublicKey(recipientStr);
+    const derived = await getAssociatedTokenAddress(mint, recipient);
+    if (!derived.equals(destAta)) {
+      throw new Error(
+        `Destination ATA ${destAta.toBase58()} does not match the ATA derived from ` +
+          `meta.recipient (${recipient.toBase58()}). Refusing to create a mismatched ATA.`
       );
     }
     preIxs.push(
-      createAssociatedTokenAccountInstruction(payer, destAta, owner, mint)
+      createAssociatedTokenAccountInstruction(payer, destAta, recipient, mint)
     );
   }
 
