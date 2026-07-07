@@ -28,6 +28,8 @@ pub enum VectorError {
     AccountMismatch,
     #[msg("Sub-instruction signer must be the Vault PDA")]
     NonPdaSignerInSubIx,
+    #[msg("Sub-instruction may not re-enter the Vector program")]
+    SelfCpiForbidden,
     #[msg("Sub-instruction CPI failed")]
     CpiFailed,
     #[msg("Extra accounts in remaining_accounts not consumed by sub-instructions")]

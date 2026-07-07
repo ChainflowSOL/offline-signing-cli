@@ -86,12 +86,26 @@ pub fn execute_sub_instructions(
     authority: &Pubkey,
     vault_bump: u8,
 ) -> Result<()> {
-    let (vault_pda, _) =
-        Pubkey::find_program_address(&[VAULT_SEED, authority.as_ref()], &crate::ID);
+    // Derive the vault PDA from the stored bump instead of re-scanning with
+    // find_program_address. The bump was persisted at init (canonical), and
+    // invoke_signed below re-derives the address from these same seeds, so a
+    // wrong bump could never yield a valid signer — this only saves compute.
+    let vault_pda = Pubkey::create_program_address(
+        &[VAULT_SEED, authority.as_ref(), &[vault_bump]],
+        &crate::ID,
+    )
+    .map_err(|_| error!(VectorError::AccountMismatch))?;
     let signer_seeds: &[&[u8]] = &[VAULT_SEED, authority.as_ref(), &[vault_bump]];
 
     let mut cursor = 0usize;
     for sub_ix in sub_ixs {
+        // Defense-in-depth: forbid the vault PDA from re-entering this program.
+        // A self-CPI would run against the not-yet-advanced seed (execute.rs
+        // advances the seed only after this function returns), which could let
+        // an attacker bundle multiple same-seed authorizations in one tx. No
+        // legitimate flow calls the Vector program recursively.
+        require!(sub_ix.program_id != crate::ID, VectorError::SelfCpiForbidden);
+
         // Program AccountInfo first.
         require!(cursor < remaining.len(), VectorError::MissingAccount);
         let program_ai = &remaining[cursor];
