@@ -52,6 +52,14 @@ export interface TxMeta {
   stakePubkey?: string;
   validatorVotePubkey?: string;
   stakeSeed?: string;
+  // Governance-specific (only set on governance-* commands).
+  governanceAction?: "deposit" | "cast-vote" | "relinquish-vote" | "withdraw";
+  realm?: string;
+  governanceProgram?: string;
+  proposal?: string;
+  governance?: string;
+  governingTokenMint?: string;
+  vote?: "yes" | "no" | "abstain" | "veto";
 }
 
 export interface VectorExecuteTxV1 {

@@ -1,10 +1,19 @@
 import {
   LAMPORTS_PER_SOL,
+  PublicKey,
   StakeProgram,
   SystemProgram,
   TransactionInstruction,
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+
+// SPL Governance canonical program IDs. A DAO can theoretically deploy its own
+// instance under a different program ID; only these hardcoded ones get the
+// friendly clear-signing decode. Anything else falls to the raw dump — safe
+// but less readable. Add IDs here when we onboard new DAOs.
+const GOVERNANCE_PROGRAM_IDS = new Set<string>([
+  "GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw", // Realms / canonical SPL Governance
+]);
 
 // Human-readable rendering of sub-instructions for the OFFLINE signer.
 //
@@ -19,6 +28,7 @@ const KNOWN_PROGRAMS: Record<string, string> = {
   [SystemProgram.programId.toBase58()]: "System Program",
   [StakeProgram.programId.toBase58()]: "Stake Program",
   [TOKEN_PROGRAM_ID.toBase58()]: "SPL Token Program",
+  "GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw": "SPL Governance",
 };
 
 const STAKE_OPS: Record<number, string> = {
@@ -100,6 +110,14 @@ export function describeSubInstruction(
       });
       return lines;
     }
+
+    if (GOVERNANCE_PROGRAM_IDS.has(pid)) {
+      const decoded = describeGovernanceInstruction(ix, data);
+      if (decoded) {
+        lines.push(...decoded);
+        return lines;
+      }
+    }
   } catch {
     // Malformed / shorter than expected — fall through to the raw dump so we
     // never show a misleading partial summary.
@@ -116,3 +134,101 @@ export function describeSubInstructions(
   ixs.forEach((ix, i) => out.push(...describeSubInstruction(ix, i)));
   return out;
 }
+
+// ── SPL Governance decoders ───────────────────────────────────────────
+//
+// Discriminators (first byte of instruction data):
+//   1  = DepositGoverningTokens { amount: u64 }
+//   2  = WithdrawGoverningTokens
+//   13 = CastVote { vote: Vote }
+//   15 = RelinquishVote
+//
+// The Vote enum in CastVote data[1..] is Borsh:
+//   variant 0 = Approve(Vec<VoteChoice>)   -> YES
+//   variant 1 = Deny                       -> NO
+//   variant 2 = Abstain
+//   variant 3 = Veto
+//
+// Returns null on any shape mismatch so the caller falls to the raw dump
+// (safer than a misleading label). The account-index picks below come
+// straight from the SPL Governance program's expected account layout.
+
+const VOTE_KIND_NAMES: Record<number, string> = {
+  0: "YES (Approve)",
+  1: "NO (Deny)",
+  2: "ABSTAIN",
+  3: "VETO",
+};
+
+function describeGovernanceInstruction(
+  ix: TransactionInstruction,
+  data: Buffer
+): string[] | null {
+  if (data.length < 1) return null;
+  const disc = data[0];
+
+  switch (disc) {
+    case 1: {
+      // DepositGoverningTokens
+      // data: [1][u64 LE amount]  (9 bytes total)
+      if (data.length < 9) return null;
+      if (ix.keys.length < 6) return null;
+      const amount = data.readBigUInt64LE(1);
+      return [
+        `        -> GOVERNANCE DEPOSIT ${amount.toString()} (raw base units)`,
+        `           realm                ${acct(ix, 0)}`,
+        `           governing_token_holding ${acct(ix, 1)}`,
+        `           source               ${acct(ix, 2)}`,
+        `           governing_token_owner ${acct(ix, 3)}`,
+        `           source_authority     ${acct(ix, 4)}`,
+      ];
+    }
+    case 2: {
+      // WithdrawGoverningTokens — data is just [2]
+      if (data.length !== 1) return null;
+      if (ix.keys.length < 5) return null;
+      return [
+        `        -> GOVERNANCE WITHDRAW governing tokens`,
+        `           realm                ${acct(ix, 0)}`,
+        `           governing_token_holding ${acct(ix, 1)}`,
+        `           destination          ${acct(ix, 2)}`,
+        `           governing_token_owner ${acct(ix, 3)}`,
+        `           token_owner_record   ${acct(ix, 4)}`,
+      ];
+    }
+    case 13: {
+      // CastVote — data: [13][voteKind][...]
+      if (data.length < 2) return null;
+      if (ix.keys.length < 8) return null;
+      const voteKind = data[1] as number;
+      const kindName = VOTE_KIND_NAMES[voteKind] ?? `unknown vote kind ${voteKind}`;
+      return [
+        `        -> GOVERNANCE CAST VOTE: ${kindName}`,
+        `           realm                ${acct(ix, 0)}`,
+        `           governance           ${acct(ix, 1)}`,
+        `           proposal             ${acct(ix, 2)}`,
+        `           proposal_owner_record ${acct(ix, 3)}`,
+        `           voter_token_owner_record ${acct(ix, 4)}`,
+        `           voter (authority)    ${acct(ix, 5)}`,
+      ];
+    }
+    case 15: {
+      // RelinquishVote — data is just [15]
+      if (data.length !== 1) return null;
+      if (ix.keys.length < 6) return null;
+      return [
+        `        -> GOVERNANCE RELINQUISH VOTE`,
+        `           realm                ${acct(ix, 0)}`,
+        `           governance           ${acct(ix, 1)}`,
+        `           proposal             ${acct(ix, 2)}`,
+        `           voter_token_owner_record ${acct(ix, 3)}`,
+        `           vote_record          ${acct(ix, 4)}`,
+      ];
+    }
+    default:
+      return null;
+  }
+}
+
+// Silence unused-var lint if PublicKey ends up unused after tree-shaking.
+void PublicKey;

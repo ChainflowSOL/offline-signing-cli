@@ -22,6 +22,12 @@ import {
   constructStakeDeactivate,
   constructStakeWithdraw,
 } from "./commands/stake";
+import {
+  constructGovernanceDeposit,
+  constructGovernanceCastVote,
+  constructGovernanceRelinquishVote,
+  constructGovernanceWithdraw,
+} from "./commands/governance";
 import { signOffline } from "./commands/sign";
 import { broadcast } from "./commands/broadcast";
 
@@ -151,6 +157,100 @@ yargs(hideBin(process.argv))
         argv.stake as string,
         argv.amount as number,
         argv.recipient as string,
+        argv.payer as string
+      )
+  )
+  .command(
+    "governance-deposit",
+    "Build an unsigned deposit of governance tokens into a DAO realm",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("governance-program", { type: "string", demandOption: true, description: "SPL Governance program pubkey" })
+        .option("realm", { type: "string", demandOption: true })
+        .option("mint", { alias: "m", type: "string", demandOption: true, description: "Governing token mint" })
+        .option("amount", { alias: "a", type: "number", demandOption: true })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructGovernanceDeposit(
+        argv.env as string,
+        argv.cold as string,
+        argv["governance-program"] as string,
+        argv.realm as string,
+        argv.mint as string,
+        argv.amount as number,
+        argv.payer as string
+      )
+  )
+  .command(
+    "governance-cast-vote",
+    "Build an unsigned cast-vote on a proposal",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("governance-program", { type: "string", demandOption: true })
+        .option("realm", { type: "string", demandOption: true })
+        .option("governance", { type: "string", demandOption: true, description: "Governance account (parent of the proposal)" })
+        .option("proposal", { type: "string", demandOption: true })
+        .option("proposal-owner-record", { type: "string", demandOption: true, description: "TokenOwnerRecord of the proposal's creator" })
+        .option("mint", { alias: "m", type: "string", demandOption: true, description: "Governing token mint" })
+        .option("vote", { alias: "v", type: "string", demandOption: true, choices: ["yes", "no", "abstain", "veto"] })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructGovernanceCastVote(
+        argv.env as string,
+        argv.cold as string,
+        argv["governance-program"] as string,
+        argv.realm as string,
+        argv.governance as string,
+        argv.proposal as string,
+        argv["proposal-owner-record"] as string,
+        argv.mint as string,
+        argv.vote as string,
+        argv.payer as string
+      )
+  )
+  .command(
+    "governance-relinquish-vote",
+    "Build an unsigned relinquish-vote (cancel a cast vote before finalization)",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("governance-program", { type: "string", demandOption: true })
+        .option("realm", { type: "string", demandOption: true })
+        .option("governance", { type: "string", demandOption: true })
+        .option("proposal", { type: "string", demandOption: true })
+        .option("mint", { alias: "m", type: "string", demandOption: true, description: "Governing token mint" })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructGovernanceRelinquishVote(
+        argv.env as string,
+        argv.cold as string,
+        argv["governance-program"] as string,
+        argv.realm as string,
+        argv.governance as string,
+        argv.proposal as string,
+        argv.mint as string,
+        argv.payer as string
+      )
+  )
+  .command(
+    "governance-withdraw",
+    "Build an unsigned withdraw of governance tokens from a DAO realm",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("governance-program", { type: "string", demandOption: true })
+        .option("realm", { type: "string", demandOption: true })
+        .option("mint", { alias: "m", type: "string", demandOption: true, description: "Governing token mint" })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructGovernanceWithdraw(
+        argv.env as string,
+        argv.cold as string,
+        argv["governance-program"] as string,
+        argv.realm as string,
+        argv.mint as string,
         argv.payer as string
       )
   )
