@@ -16,12 +16,26 @@ import {
   PublicKey,
   StakeProgram,
   SystemProgram,
+  TransactionInstruction,
 } from "@solana/web3.js";
 import {
   createAssociatedTokenAccountInstruction,
   createTransferInstruction,
   getAssociatedTokenAddress,
 } from "@solana/spl-token";
+import BN from "bn.js";
+import {
+  getTokenOwnerRecordAddress,
+  getVoteRecordAddress,
+  PROGRAM_VERSION_V3,
+  Vote,
+  VoteKind,
+  VoteChoice,
+  withCastVote,
+  withDepositGoverningTokens,
+  withRelinquishVote,
+  withWithdrawGoverningTokens,
+} from "@solana/spl-governance";
 import {
   digestClose,
   digestExecute,
@@ -226,6 +240,154 @@ async function run() {
         };
       },
       mustContainOnSign: ["STAKE DEACTIVATE"],
+    },
+    {
+      name: "F8-governance-deposit",
+      buildPayload: async () => {
+        const gov = new PublicKey("GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw");
+        const realm = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"); // arbitrary
+        const mint = new PublicKey("So11111111111111111111111111111111111111112");
+        const sourceAta = await getAssociatedTokenAddress(mint, vault, true);
+        const list: TransactionInstruction[] = [];
+        await withDepositGoverningTokens(
+          list, gov, PROGRAM_VERSION_V3, realm, sourceAta, mint,
+          vault, vault, hot, new BN(1_000_000), true
+        );
+        const ix = list[list.length - 1]!;
+        return {
+          version: "vector-v1",
+          action: "execute",
+          description: "Deposit into realm",
+          network: "devnet",
+          coldAddress: cold.toBase58(),
+          feePayer: hot.toBase58(),
+          seedBase64: seed.toString("base64"),
+          digestBase64: digestExecute(seed, encodeSubInstructions([ix])).toString("base64"),
+          subInstructions: [ix].map(serializeInstruction),
+          meta: {
+            governanceAction: "deposit",
+            realm: realm.toBase58(),
+            governanceProgram: gov.toBase58(),
+            governingTokenMint: mint.toBase58(),
+            amount: 1,
+            decimals: 6,
+          },
+        };
+      },
+      mustContainOnSign: ["GOVERNANCE DEPOSIT", "SPL Governance"],
+    },
+    {
+      name: "F9-governance-cast-vote-yes",
+      buildPayload: async () => {
+        const gov = new PublicKey("GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw");
+        const realm = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+        const governance = new PublicKey("So11111111111111111111111111111111111111112");
+        const proposal = new PublicKey("11111111111111111111111111111111");
+        const proposalOwnerRecord = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
+        const mint = new PublicKey("So11111111111111111111111111111111111111112");
+        const tokenOwnerRecord = await getTokenOwnerRecordAddress(gov, realm, mint, vault);
+        const yesVote = new Vote({
+          voteType: VoteKind.Approve,
+          approveChoices: [new VoteChoice({ rank: 0, weightPercentage: 100 })],
+          deny: undefined,
+          veto: undefined,
+        });
+        const list: TransactionInstruction[] = [];
+        await withCastVote(
+          list, gov, PROGRAM_VERSION_V3, realm, governance, proposal,
+          proposalOwnerRecord, tokenOwnerRecord, vault, mint, yesVote, hot
+        );
+        const ix = list[list.length - 1]!;
+        return {
+          version: "vector-v1",
+          action: "execute",
+          description: "Vote yes",
+          network: "devnet",
+          coldAddress: cold.toBase58(),
+          feePayer: hot.toBase58(),
+          seedBase64: seed.toString("base64"),
+          digestBase64: digestExecute(seed, encodeSubInstructions([ix])).toString("base64"),
+          subInstructions: [ix].map(serializeInstruction),
+          meta: {
+            governanceAction: "cast-vote",
+            realm: realm.toBase58(),
+            governanceProgram: gov.toBase58(),
+            governance: governance.toBase58(),
+            proposal: proposal.toBase58(),
+            governingTokenMint: mint.toBase58(),
+            vote: "yes",
+          },
+        };
+      },
+      mustContainOnSign: ["GOVERNANCE CAST VOTE: YES (Approve)"],
+    },
+    {
+      name: "F10-governance-relinquish-vote",
+      buildPayload: async () => {
+        const gov = new PublicKey("GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw");
+        const realm = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+        const governance = new PublicKey("So11111111111111111111111111111111111111112");
+        const proposal = new PublicKey("11111111111111111111111111111111");
+        const mint = new PublicKey("So11111111111111111111111111111111111111112");
+        const tokenOwnerRecord = await getTokenOwnerRecordAddress(gov, realm, mint, vault);
+        const voteRecord = await getVoteRecordAddress(gov, proposal, tokenOwnerRecord);
+        const list: TransactionInstruction[] = [];
+        await withRelinquishVote(
+          list, gov, PROGRAM_VERSION_V3, realm, governance, proposal,
+          tokenOwnerRecord, mint, voteRecord, vault, hot
+        );
+        const ix = list[list.length - 1]!;
+        return {
+          version: "vector-v1",
+          action: "execute",
+          description: "Relinquish vote",
+          network: "devnet",
+          coldAddress: cold.toBase58(),
+          feePayer: hot.toBase58(),
+          seedBase64: seed.toString("base64"),
+          digestBase64: digestExecute(seed, encodeSubInstructions([ix])).toString("base64"),
+          subInstructions: [ix].map(serializeInstruction),
+          meta: {
+            governanceAction: "relinquish-vote",
+            realm: realm.toBase58(),
+            governanceProgram: gov.toBase58(),
+            proposal: proposal.toBase58(),
+          },
+        };
+      },
+      mustContainOnSign: ["GOVERNANCE RELINQUISH VOTE"],
+    },
+    {
+      name: "F11-governance-withdraw",
+      buildPayload: async () => {
+        const gov = new PublicKey("GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw");
+        const realm = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+        const mint = new PublicKey("So11111111111111111111111111111111111111112");
+        const destAta = await getAssociatedTokenAddress(mint, vault, true);
+        const list: TransactionInstruction[] = [];
+        await withWithdrawGoverningTokens(
+          list, gov, PROGRAM_VERSION_V3, realm, destAta, mint, vault
+        );
+        const ix = list[list.length - 1]!;
+        return {
+          version: "vector-v1",
+          action: "execute",
+          description: "Withdraw from realm",
+          network: "devnet",
+          coldAddress: cold.toBase58(),
+          feePayer: hot.toBase58(),
+          seedBase64: seed.toString("base64"),
+          digestBase64: digestExecute(seed, encodeSubInstructions([ix])).toString("base64"),
+          subInstructions: [ix].map(serializeInstruction),
+          meta: {
+            governanceAction: "withdraw",
+            realm: realm.toBase58(),
+            governanceProgram: gov.toBase58(),
+            governingTokenMint: mint.toBase58(),
+          },
+        };
+      },
+      mustContainOnSign: ["GOVERNANCE WITHDRAW governing tokens"],
     },
     {
       name: "F7-stake-withdraw",
