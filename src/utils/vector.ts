@@ -178,12 +178,25 @@ export function encodeSubInstructions(
 
 // ── Digest computation ──────────────────────────────────────────────
 
+// Program ID is bound into every digest so a signature valid at one deployed
+// program cannot be replayed against a differently-deployed one (audit F5).
+// Must match the on-chain formula in execute.rs and close.rs exactly.
 export function digestExecute(seed: Buffer, subIxData: Buffer): Buffer {
-  return sha256(seed, Buffer.from([ACTION_EXECUTE]), subIxData);
+  return sha256(
+    seed,
+    Buffer.from([ACTION_EXECUTE]),
+    VECTOR_PROGRAM_ID.toBuffer(),
+    subIxData
+  );
 }
 
 export function digestClose(seed: Buffer, closeTo: PublicKey): Buffer {
-  return sha256(seed, Buffer.from([ACTION_CLOSE]), closeTo.toBuffer());
+  return sha256(
+    seed,
+    Buffer.from([ACTION_CLOSE]),
+    VECTOR_PROGRAM_ID.toBuffer(),
+    closeTo.toBuffer()
+  );
 }
 
 // ── Instruction builders ────────────────────────────────────────────

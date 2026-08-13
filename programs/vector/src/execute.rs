@@ -32,8 +32,16 @@ pub fn handler(
     let seed = ctx.accounts.vector.seed;
     let vault_bump = ctx.accounts.vector.vault_bump;
 
-    // 1. Expected digest = sha256(seed || ACTION_EXECUTE || sub_ix_data)
-    let digest = sha256(&[&seed, &[ACTION_EXECUTE], &sub_ix_data]);
+    // 1. Expected digest = sha256(seed || ACTION_EXECUTE || program_id || sub_ix_data)
+    //    Binding crate::ID prevents a signature valid at one deployed program
+    //    from ever being replayed against a different deployment (audit F5).
+    let program_id_bytes = crate::ID.to_bytes();
+    let digest = sha256(&[
+        &seed,
+        &[ACTION_EXECUTE],
+        &program_id_bytes,
+        &sub_ix_data,
+    ]);
 
     // 2. Verify precompile signed (authority, digest)
     verify_ed25519_precompile(

@@ -45,7 +45,15 @@ pub fn handler(ctx: Context<CloseVector>, ed25519_ix_index: u8) -> Result<()> {
     let authority = vector.authority;
     let vault_bump = vector.vault_bump;
 
-    let digest = sha256(&[&vector.seed, &[ACTION_CLOSE], close_to_key.as_ref()]);
+    // digest = sha256(seed || ACTION_CLOSE || program_id || close_to)
+    // program_id binding prevents cross-deployment signature reuse (audit F5).
+    let program_id_bytes = crate::ID.to_bytes();
+    let digest = sha256(&[
+        &vector.seed,
+        &[ACTION_CLOSE],
+        &program_id_bytes,
+        close_to_key.as_ref(),
+    ]);
 
     verify_ed25519_precompile(
         &ctx.accounts.instructions_sysvar,
