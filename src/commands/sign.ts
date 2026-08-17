@@ -1,4 +1,4 @@
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
 import * as fs from "fs";
 import * as readline from "readline";
 import nacl from "tweetnacl";
@@ -9,8 +9,44 @@ import {
   SignedTxJson,
   UnsignedTxJson,
 } from "../utils/io";
-import { digestClose, digestExecute, encodeSubInstructions } from "../utils/vector";
+import {
+  digestClose,
+  digestExecute,
+  encodeSubInstructions,
+  findVaultPda,
+} from "../utils/vector";
 import { describeSubInstructions } from "../utils/describe";
+
+// Normally the Vault PDA is the only account that may sign inside a
+// sub-instruction. A few programs (SPL Governance CastVote) additionally
+// require the fee payer to sign, because they create an account as part of the
+// instruction. That account can be DEBITED by what is being signed, so surface
+// it loudly rather than letting it hide among the decoded output.
+function coSignerWarning(
+  authority: PublicKey,
+  subIxs: TransactionInstruction[]
+): string[] {
+  const [vault] = findVaultPda(authority);
+  const extra = new Set<string>();
+  for (const ix of subIxs) {
+    for (const k of ix.keys) {
+      if (k.isSigner && !k.pubkey.equals(vault)) extra.add(k.pubkey.toBase58());
+    }
+  }
+  if (extra.size === 0) return [];
+  const lines = [
+    "",
+    "  !! ADDITIONAL SIGNER REQUIRED !!",
+    "  This action is NOT limited to the vault. It also requires:",
+  ];
+  for (const p of extra) lines.push(`      ${p}`);
+  lines.push(
+    "  That account co-signs the transaction and CAN BE DEBITED by the",
+    "  instruction(s) above. Confirm it is your own hot wallet and that the",
+    "  decoded action is exactly what you intend before continuing."
+  );
+  return lines;
+}
 
 function loadColdKeypair(keypairPath: string): Keypair {
   if (!fs.existsSync(keypairPath)) {
@@ -85,6 +121,7 @@ export async function signOffline(
     actionLines = [
       "  Action: EXECUTE the following sub-instruction(s):",
       ...describeSubInstructions(subIxs),
+      ...coSignerWarning(new PublicKey(tx.coldAddress), subIxs),
     ];
   } else {
     const closeTo = new PublicKey(tx.closeTo);

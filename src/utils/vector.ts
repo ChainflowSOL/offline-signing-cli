@@ -10,9 +10,12 @@ import { createHash } from "crypto";
 
 // ── Program constants ────────────────────────────────────────────────
 
-// Dev/local program ID. For production, run `anchor keys sync` and update.
+// Mainnet program ID. Devnet deployment is at
+// DkKZTgUDgkqUu5tck69uQJKf1deNzSY7YcU8F47oLXPZ — kept separate so signatures
+// from one deployment cannot replay against the other (F5 also enforces this
+// on chain by binding program ID into the digest).
 export const VECTOR_PROGRAM_ID = new PublicKey(
-  "DkKZTgUDgkqUu5tck69uQJKf1deNzSY7YcU8F47oLXPZ"
+  "FkCL7nUJym3Yc9PVgr7TQ3TRn5uJApu7FdGSV1X6rKVd"
 );
 
 export const VECTOR_PDA_SEED = Buffer.from("vector");
@@ -220,6 +223,32 @@ export function buildInitializeInstruction(
   });
 }
 
+// Any sub-instruction signer that isn't the Vault PDA must be supplied as the
+// program's optional `co_signer` account and sign the transaction for real.
+// Returns the single such pubkey, or null when the vault-only rule applies.
+export function findCoSigner(
+  authority: PublicKey,
+  subIxs: TransactionInstruction[]
+): PublicKey | null {
+  const [vaultPda] = findVaultPda(authority);
+  const extra = new Set<string>();
+  for (const ix of subIxs) {
+    for (const meta of ix.keys) {
+      if (meta.isSigner && !meta.pubkey.equals(vaultPda)) {
+        extra.add(meta.pubkey.toBase58());
+      }
+    }
+  }
+  if (extra.size === 0) return null;
+  if (extra.size > 1) {
+    throw new Error(
+      `Sub-instructions request ${extra.size} non-vault signers ` +
+        `(${[...extra].join(", ")}); the program supports at most one co-signer.`
+    );
+  }
+  return new PublicKey([...extra][0]!);
+}
+
 export function buildExecuteInstruction(
   authority: PublicKey,
   ed25519IxIndex: number,
@@ -227,6 +256,7 @@ export function buildExecuteInstruction(
   subIxs: TransactionInstruction[]
 ): TransactionInstruction {
   const [vectorPda] = findVectorPda(authority);
+  const coSigner = findCoSigner(authority, subIxs);
 
   // remaining_accounts layout (matches Rust execute_sub_instructions walk):
   //   for each sub-ix:
@@ -236,13 +266,12 @@ export function buildExecuteInstruction(
   for (const ix of subIxs) {
     remaining.push({ pubkey: ix.programId, isSigner: false, isWritable: false });
     for (const meta of ix.keys) {
-      // Sub-ix signers are only valid for the Vector PDA. Strip isSigner at
-      // the tx level — the PDA's signature comes from invoke_signed inside
-      // the program. A "true" here would force tx-level signing, which is
-      // impossible for a PDA.
+      // The Vault PDA's signature comes from invoke_signed inside the program,
+      // so it must NOT be marked a signer at the tx level (a PDA cannot sign a
+      // transaction). A co-signer, by contrast, does sign the tx for real.
       remaining.push({
         pubkey: meta.pubkey,
-        isSigner: false,
+        isSigner: coSigner !== null && meta.pubkey.equals(coSigner),
         isWritable: meta.isWritable,
       });
     }
@@ -264,6 +293,10 @@ export function buildExecuteInstruction(
     keys: [
       { pubkey: vectorPda, isSigner: false, isWritable: true },
       { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+      // Anchor represents an absent optional account as the program ID itself.
+      coSigner
+        ? { pubkey: coSigner, isSigner: true, isWritable: true }
+        : { pubkey: VECTOR_PROGRAM_ID, isSigner: false, isWritable: false },
       ...remaining,
     ],
     data,

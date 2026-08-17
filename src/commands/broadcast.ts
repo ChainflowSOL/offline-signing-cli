@@ -12,6 +12,11 @@ import {
   getAssociatedTokenAddress,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
+import {
+  getTokenOwnerRecordAddress,
+  PROGRAM_VERSION_V3,
+  withCreateTokenOwnerRecord,
+} from "@solana/spl-governance";
 import * as fs from "fs";
 import nacl from "tweetnacl";
 import { getConnection } from "../utils/connection";
@@ -28,6 +33,7 @@ import {
   buildEd25519PrecompileInstruction,
   buildExecuteInstruction,
   encodeSubInstructions,
+  findVaultPda,
 } from "../utils/vector";
 
 function loadKeypair(p: string): Keypair {
@@ -142,10 +148,19 @@ async function buildExecuteIxs(
   const subIxs = unsigned.subInstructions.map(deserializeInstruction);
   const subIxData = encodeSubInstructions(subIxs);
 
+  assertCoSignerScope(authority, subIxs, payer);
+
   // Hot-wallet-side pre-instructions: ensure destination ATAs exist for any
   // SPL token transfers. These are NOT in the signed digest — they're
   // fee-payer concerns. We pay rent and the tx still requires the cold sig.
   const preIxs: TransactionInstruction[] = [];
+
+  // Same idea for SPL Governance: DepositGoverningTokens needs the voter's
+  // TokenOwnerRecord to exist. Creating it costs rent and requires a payer
+  // signature, so it can't live inside a Vault-PDA-signed sub-instruction —
+  // we create it hot-side first instead.
+  await addGovernanceTokenOwnerRecordIxs(connection, unsigned, subIxs, payer, preIxs);
+
   for (const sub of subIxs) {
     if (!sub.programId.equals(TOKEN_PROGRAM_ID)) continue;
     if (sub.data.length === 0 || sub.data[0] !== 3) continue; // 3 = Transfer
@@ -203,6 +218,112 @@ async function buildExecuteIxs(
   );
 
   return [...preIxs, precompileIx, executeIx];
+}
+
+// Programs allowed to request a co-signer (a non-vault signer inside a
+// sub-instruction). Kept deliberately tiny: only SPL Governance genuinely needs
+// it, because CastVote creates the VoteRecord as part of voting and the Vault
+// PDA cannot pay rent.
+//
+// The on-chain program would accept a co-signer for ANY program. This check is
+// the client-side belt to that braces: it confines the widened signer model to
+// governance, so even a cold key that has been compromised cannot use this path
+// to make the hot wallet sign an arbitrary transfer of its own funds.
+const CO_SIGNER_ALLOWED_PROGRAMS = new Set<string>([
+  "GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw", // SPL Governance (Realms)
+]);
+
+function assertCoSignerScope(
+  authority: PublicKey,
+  subIxs: TransactionInstruction[],
+  payer: PublicKey
+): void {
+  const [vault] = findVaultPda(authority);
+  for (const ix of subIxs) {
+    for (const k of ix.keys) {
+      if (!k.isSigner || k.pubkey.equals(vault)) continue;
+
+      if (!k.pubkey.equals(payer)) {
+        throw new Error(
+          `Sub-instruction requires ${k.pubkey.toBase58()} to sign, but that is ` +
+            `neither the vault nor this broadcaster's fee payer. Refusing to broadcast.`
+        );
+      }
+      if (!CO_SIGNER_ALLOWED_PROGRAMS.has(ix.programId.toBase58())) {
+        throw new Error(
+          `Sub-instruction for program ${ix.programId.toBase58()} asks the fee payer ` +
+            `(${payer.toBase58()}) to co-sign. Only SPL Governance may do this, because ` +
+            `its CastVote creates the vote record. Refusing to broadcast — this would ` +
+            `let the signed action debit your hot wallet.`
+        );
+      }
+    }
+  }
+}
+
+// SPL Governance DepositGoverningTokens account layout:
+//   0 realm, 1 holding, 2 source, 3 owner, 4 source_authority,
+//   5 token_owner_record, 6 payer, 7 system, 8 spl_token, 9 realm_config
+const GOV_DEPOSIT_DISCRIMINATOR = 1;
+const GOV_TOR_ACCOUNT_INDEX = 5;
+const GOV_OWNER_ACCOUNT_INDEX = 3;
+
+async function addGovernanceTokenOwnerRecordIxs(
+  connection: Connection,
+  unsigned: VectorExecuteTxV1,
+  subIxs: TransactionInstruction[],
+  payer: PublicKey,
+  preIxs: TransactionInstruction[]
+): Promise<void> {
+  const govProgramStr = unsigned.meta?.governanceProgram;
+  const realmStr = unsigned.meta?.realm;
+  const mintStr = unsigned.meta?.governingTokenMint;
+  if (!govProgramStr || !realmStr || !mintStr) return;
+
+  const govProgram = new PublicKey(govProgramStr);
+  const realm = new PublicKey(realmStr);
+  const mint = new PublicKey(mintStr);
+
+  for (const sub of subIxs) {
+    if (!sub.programId.equals(govProgram)) continue;
+    if (sub.data.length === 0 || sub.data[0] !== GOV_DEPOSIT_DISCRIMINATOR) continue;
+    if (sub.keys.length <= GOV_TOR_ACCOUNT_INDEX) continue;
+
+    const torMeta = sub.keys[GOV_TOR_ACCOUNT_INDEX];
+    const ownerMeta = sub.keys[GOV_OWNER_ACCOUNT_INDEX];
+    if (!torMeta || !ownerMeta) continue;
+
+    const info = await connection.getAccountInfo(torMeta.pubkey);
+    if (info) continue; // already exists — nothing to do
+
+    // meta.* is untrusted, so round-trip-verify: the record we're about to
+    // create must derive to exactly the address the signed sub-instruction
+    // names. A tampered meta can then only cause a clean failure, never a
+    // record created against a realm/mint the cold wallet didn't authorize.
+    const derived = await getTokenOwnerRecordAddress(
+      govProgram,
+      realm,
+      mint,
+      ownerMeta.pubkey
+    );
+    if (!derived.equals(torMeta.pubkey)) {
+      throw new Error(
+        `TokenOwnerRecord ${torMeta.pubkey.toBase58()} does not match the address ` +
+          `derived from meta (realm=${realm.toBase58()}, mint=${mint.toBase58()}). ` +
+          `Refusing to create a mismatched record.`
+      );
+    }
+
+    await withCreateTokenOwnerRecord(
+      preIxs,
+      govProgram,
+      PROGRAM_VERSION_V3,
+      realm,
+      ownerMeta.pubkey,
+      mint,
+      payer
+    );
+  }
 }
 
 function buildCloseIxs(

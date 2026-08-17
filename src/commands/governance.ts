@@ -38,6 +38,27 @@ function takeIx(list: TransactionInstruction[]): TransactionInstruction {
   return ix;
 }
 
+// The on-chain program rejects any sub-instruction signer that isn't the Vault
+// PDA (it can only produce that one signature, via invoke_signed). SPL
+// Governance sets a signer flag on the fee payer for account-creation paths;
+// those accounts are pre-created hot-side instead, so clearing the flag here
+// keeps the instruction executable without weakening the invariant. The cleared
+// flags are part of the digest the cold wallet signs, so this is not something
+// a compromised producer can flip afterwards.
+function stripNonVaultSigners(
+  ix: TransactionInstruction,
+  vault: PublicKey
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: ix.programId,
+    data: ix.data,
+    keys: ix.keys.map((k) => ({
+      ...k,
+      isSigner: k.isSigner && k.pubkey.equals(vault),
+    })),
+  });
+}
+
 async function fetchSeedAndVault(
   env: string,
   authority: PublicKey
@@ -161,7 +182,16 @@ export async function constructGovernanceDeposit(
     amountRaw,
     true // governingTokenOwnerIsSigner — vault must sign as owner
   );
-  const subIxs = [takeIx(ixList)];
+
+  // SPL Governance marks the payer as a signer because DepositGoverningTokens
+  // funds the TokenOwnerRecord when it doesn't exist yet. Our program only
+  // permits the Vault PDA to sign a sub-instruction, so we drop that flag and
+  // instead have broadcast.ts pre-create the TokenOwnerRecord as an unsigned
+  // hot-wallet instruction (same treatment as destination ATAs). Once the
+  // record exists, SPL Governance never touches the payer, so the cleared flag
+  // is safe — and if the record were somehow missing at execution time the CPI
+  // fails cleanly rather than moving funds.
+  const subIxs = [stripNonVaultSigners(takeIx(ixList), vault)];
 
   const { seed } = await fetchSeedAndVault(env, authority);
 
@@ -247,6 +277,8 @@ export async function constructGovernanceCastVote(
     vote,
     feePayer
   );
+  // CastVote creates the VoteRecord (the vote *is* the account), so the fee
+  // payer must genuinely sign. It travels as the program's `co_signer`.
   const subIxs = [takeIx(ixList)];
 
   const { seed } = await fetchSeedAndVault(env, authority);
@@ -327,6 +359,8 @@ export async function constructGovernanceRelinquishVote(
     vault, // governanceAuthority — only needed if proposal is still active
     feePayer // beneficiary of rent refund
   );
+  // RelinquishVote may close the VoteRecord and refund rent; keep whatever
+  // signer SPL Governance asks for and let findCoSigner route it.
   const subIxs = [takeIx(ixList)];
 
   const { seed } = await fetchSeedAndVault(env, authority);
@@ -390,7 +424,7 @@ export async function constructGovernanceWithdraw(
     mint,
     vault // governingTokenOwner
   );
-  const subIxs = [takeIx(ixList)];
+  const subIxs = [stripNonVaultSigners(takeIx(ixList), vault)];
 
   const { seed } = await fetchSeedAndVault(env, authority);
 
