@@ -6,16 +6,19 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-vector = "DkKZTgUDgkqUu5tck69uQJKf1deNzSY7YcU8F47oLXPZ"
+vector = "FkCL7nUJym3Yc9PVgr7TQ3TRn5uJApu7FdGSV1X6rKVd"
 
 [programs.devnet]
 vector = "DkKZTgUDgkqUu5tck69uQJKf1deNzSY7YcU8F47oLXPZ"
+
+[programs.mainnet]
+vector = "FkCL7nUJym3Yc9PVgr7TQ3TRn5uJApu7FdGSV1X6rKVd"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "mainnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
