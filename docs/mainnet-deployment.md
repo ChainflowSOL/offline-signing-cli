@@ -405,6 +405,11 @@ Things this deployment does NOT protect against. All must be acknowledged before
 4. **The cold wallet is a single point of failure.** If the cold wallet's mnemonic is lost, the vault is unrecoverable. If the cold wallet is compromised, the vault is drained.
 5. **Solana network downtime is unmitigated.** If Solana halts, no operations are possible.
 6. **Priority fee spikes can price out low-fee broadcasts.** During congestion, the CLI does not adaptively bid; broadcast may fail silently until fees ease.
+7. **Governance voting widens the signer model.** `governance-cast-vote` passes the hot wallet as an optional `co_signer`, because SPL Governance creates the VoteRecord as part of voting and the Vault PDA cannot pay its rent. Consequences:
+   - A compromised **hot** wallet gains nothing — signer flags live inside `sub_ix_data`, which is bound into the cold-signed digest.
+   - A compromised **cold** wallet could, via this path, cause the hot wallet to be debited. Bounded by the `broadcast.ts` allowlist (SPL Governance only, fee payer only) and disclosed at signing time by an explicit `!! ADDITIONAL SIGNER REQUIRED !!` warning.
+   - 11 of 12 commands never pass a co-signer and keep the original strict vault-only rule.
+   - See `audit/REPORT.md` → "Revision — co-signer added to `execute`" for the full analysis.
 
 ---
 
