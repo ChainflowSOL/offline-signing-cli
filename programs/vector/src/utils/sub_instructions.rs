@@ -85,6 +85,7 @@ pub fn execute_sub_instructions(
     remaining: &[AccountInfo],
     authority: &Pubkey,
     vault_bump: u8,
+    co_signer: Option<Pubkey>,
 ) -> Result<()> {
     // Derive the vault PDA from the stored bump instead of re-scanning with
     // find_program_address. The bump was persisted at init (canonical), and
@@ -128,13 +129,18 @@ pub fn execute_sub_instructions(
             );
             cursor += 1;
 
-            // Only the Vault PDA can be a signer in a sub-instruction —
-            // its signature comes from invoke_signed below. Any other
-            // "is_signer = true" would require a tx-level signer for an
-            // account the cold wallet doesn't control.
+            // Signers inside a sub-instruction are limited to:
+            //   1. the Vault PDA — signed here via invoke_signed, and
+            //   2. the optional co-signer, which Anchor has already proven
+            //      signed the transaction.
+            // Both pubkeys come from `sub_ix_data`, which is bound into the
+            // cold-signed digest, so a broadcaster can neither add a signer nor
+            // swap which account fills the co-signer slot.
             if sub_acc.is_signer {
+                let is_vault = sub_acc.pubkey == vault_pda;
+                let is_co_signer = co_signer == Some(sub_acc.pubkey);
                 require!(
-                    sub_acc.pubkey == vault_pda,
+                    is_vault || is_co_signer,
                     VectorError::NonPdaSignerInSubIx
                 );
             }
