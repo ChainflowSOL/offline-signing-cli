@@ -20,14 +20,24 @@ import {
 import * as fs from "fs";
 import { findVaultPda } from "../src/utils/vector";
 
+// Usage: setup-mint.ts <COLD_PUBKEY> [devnet|mainnet|<rpc-url>]
+function rpcFor(env: string): string {
+  if (env === "devnet") return "https://api.devnet.solana.com";
+  if (env === "mainnet" || env === "mainnet-beta")
+    return "https://api.mainnet-beta.solana.com";
+  return env;
+}
+
 async function main() {
-  const conn = new Connection("https://api.devnet.solana.com", "confirmed");
+  const coldStr = process.argv[2];
+  if (!coldStr) throw new Error("usage: setup-mint.ts <COLD_PUBKEY> [cluster]");
+  const conn = new Connection(rpcFor(process.argv[3] ?? "devnet"), "confirmed");
   const payer = Keypair.fromSecretKey(
     new Uint8Array(
       JSON.parse(fs.readFileSync(`${process.env.HOME}/.config/solana/id.json`, "utf-8"))
     )
   );
-  const cold = new PublicKey(fs.readFileSync("smoke/.cold-v2-pubkey", "utf-8").trim());
+  const cold = new PublicKey(coldStr);
   const [vault] = findVaultPda(cold);
 
   const mintKp = Keypair.generate();
