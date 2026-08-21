@@ -23,7 +23,7 @@ flowchart LR
 
     subgraph ONLINE["🌐 ONLINE machine (hot wallet)"]
         HotKey[/"hot-wallet.json<br/>fee payer"/]
-        ConstructCmd["sol-transfer<br/>token-transfer<br/>close-authority"]
+        ConstructCmd["sol-transfer / token-transfer<br/>stake-* / governance-*<br/>close-authority"]
         BroadcastCmd["broadcast"]
         HotKey --> BroadcastCmd
         ConstructCmd --> Unsigned[/"unsigned-tx.json<br/>(digest only)"/]
@@ -32,7 +32,7 @@ flowchart LR
 
     subgraph CHAIN["⛓️ Solana"]
         Precompile["Ed25519 precompile<br/>Ed25519SigVerify1111…"]
-        VectorProg["Vector program<br/>DkKZTgUDgkqUu5tck69uQJKf1deNzSY7YcU8F47oLXPZ"]
+        VectorProg["Vector program<br/>FkCL7nUJym3Yc9PVgr7TQ3TRn5uJApu7FdGSV1X6rKVd"]
         StatePDA[("Vector PDA<br/>seed = ['vector', auth]<br/>{authority, seed, bumps}")]
         VaultPDA[("Vault PDA<br/>seed = ['vault', auth]<br/>holds SOL + SPL ATAs")]
         VectorProg -.owns.-> StatePDA
@@ -100,14 +100,17 @@ account that carries data — so SOL must live on a system-owned PDA.
 Each `execute` advances the on-chain seed:
 
 ```
-digest      = SHA-256(seed || ACTION_EXECUTE || sub_ix_data)
+digest      = SHA-256(seed || ACTION_EXECUTE || program_id || sub_ix_data)
 new_seed    = SHA-256(seed || digest)
 ```
 
 A pre-signed digest is bound to the seed it was computed against. Once the
 seed advances, the old signature can never be replayed.
 
-`close` uses the same scheme with `ACTION_CLOSE || close_to_pubkey`.
+`program_id` is bound in as well, so a signature valid against one deployment
+can never be replayed against a different one (e.g. devnet -> mainnet).
+
+`close` uses the same scheme with `ACTION_CLOSE || program_id || close_to_pubkey`.
 
 ## On-chain program (Anchor)
 
@@ -133,8 +136,17 @@ per ix:
   [data]
 ```
 
-Only the Vault PDA may be marked `is_signer` — the program signs CPIs with
-the vault seeds via `invoke_signed`.
+The Vault PDA is normally the only account that may be marked `is_signer` —
+the program signs CPIs with the vault seeds via `invoke_signed`.
+
+`execute` also accepts an **optional `co_signer`** account. When present, that
+one additional pubkey may be a sub-instruction signer. This exists solely for
+SPL Governance `CastVote`, which creates the vote record as part of voting and
+therefore needs a rent payer that signs; the Vault PDA cannot pay rent. Anchor's
+`Signer` type guarantees the co-signer really signed the transaction, and its
+pubkey lives inside `sub_ix_data`, so it is covered by the cold wallet's
+signature. Twelve of the thirteen commands pass no co-signer and keep the strict
+vault-only rule.
 
 ## CLI commands
 
@@ -151,6 +163,10 @@ offline-signer <command> [options] [--env devnet|mainnet|<rpc-url>]
 | `stake-delegate`    | Hot     | Build an unsigned delegate-to-validator             |
 | `stake-deactivate`  | Hot     | Build an unsigned deactivate-stake                  |
 | `stake-withdraw`    | Hot     | Build an unsigned withdraw-from-stake               |
+| `governance-deposit` | Hot    | Deposit governance tokens into a DAO realm (grants voting weight) |
+| `governance-cast-vote` | Hot  | Vote yes / no / abstain / veto on a proposal        |
+| `governance-relinquish-vote` | Hot | Cancel a cast vote before the proposal finalizes |
+| `governance-withdraw` | Hot    | Withdraw governance tokens back out of the realm    |
 | `close-authority`   | Hot     | Build an unsigned close                             |
 | `sign`              | **Cold**| Sign the digest in `unsigned-tx.json`               |
 | `broadcast`         | Hot     | Assemble `[Ed25519 precompile, vector ix]` and send |
@@ -250,15 +266,114 @@ offline-signer stake-withdraw \
   for a 200-byte stake account). `stake-create` with less will succeed but
   `stake-delegate` will fail with Stake program error `0xc`
   (`InsufficientDelegation`).
-- The cold-side `sign` UI decodes the `meta` and shows `Stake op`,
-  `Stake acct`, `Validator`, `Amount`, `Recipient` so the human at the keys
-  sees what they're authorizing.
+- The cold-side `sign` UI decodes the actual instruction bytes (not the
+  producer's label) and shows the stake operation, account, validator and
+  amount, so the human at the keys sees what they are authorizing.
 - Multiple stake accounts per authority: use a distinct `--seed` for each.
   All inherit the Vault PDA as stake & withdraw authority, so one cold key
   controls the whole portfolio.
 - Pre-signing: `signed-tx.json` produced offline is single-use (hashchain
   replay protection). Useful for break-glass "deactivate everything"
   procedures held in escrow.
+
+### DAO governance flow
+
+The four `governance-*` commands drive **SPL Governance** (Realms, Marinade,
+Metaplex and most on-chain DAOs). The Vault PDA is the `governing_token_owner`,
+so every governance action requires the cold-wallet signature.
+
+Deposit first: voting weight comes from tokens held inside the realm, not from
+tokens sitting in the vault's ATA.
+
+```bash
+# 1. Deposit governance tokens into the realm -> grants voting weight
+offline-signer governance-deposit \
+  --env mainnet \
+  --cold <COLD_PUBKEY> \
+  --governance-program GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw \
+  --realm <REALM_PUBKEY> \
+  --mint <GOVERNING_TOKEN_MINT> \
+  --amount 500 \
+  --payer <HOT_PUBKEY>
+# ... sign ... broadcast
+
+# 2. Vote on a proposal
+offline-signer governance-cast-vote \
+  --env mainnet \
+  --cold <COLD_PUBKEY> \
+  --governance-program GovER5Lthms3bLBqWub97yVrMmEogzX7xNjdXpPPCVZw \
+  --realm <REALM_PUBKEY> \
+  --governance <GOVERNANCE_PUBKEY> \
+  --proposal <PROPOSAL_PUBKEY> \
+  --proposal-owner-record <PROPOSAL_CREATOR_TOKEN_OWNER_RECORD> \
+  --mint <GOVERNING_TOKEN_MINT> \
+  --vote yes \
+  --payer <HOT_PUBKEY>
+
+# 3. Optionally cancel that vote while the proposal is still open
+offline-signer governance-relinquish-vote \
+  --env mainnet --cold <COLD_PUBKEY> \
+  --governance-program <GOV> --realm <REALM> \
+  --governance <GOVERNANCE> --proposal <PROPOSAL> \
+  --mint <MINT> --payer <HOT_PUBKEY>
+
+# 4. Withdraw the tokens back to the vault's ATA
+offline-signer governance-withdraw \
+  --env mainnet --cold <COLD_PUBKEY> \
+  --governance-program <GOV> --realm <REALM> \
+  --mint <MINT> --payer <HOT_PUBKEY>
+```
+
+**Notes for operators:**
+
+- `--vote` accepts `yes`, `no`, `abstain` or `veto`.
+- **`cast-vote` prints an `!! ADDITIONAL SIGNER REQUIRED !!` warning at signing
+  time. This is expected.** SPL Governance creates the vote record as part of
+  casting a vote, and the rent payer must sign; the Vault PDA cannot pay rent,
+  so the hot wallet co-signs that one instruction. Verify the named pubkey is
+  your own hot wallet before confirming. No other command does this.
+- `governance-deposit` needs the voter's `TokenOwnerRecord` to exist. If it
+  does not, `broadcast` creates it hot-side first as an unsigned pre-instruction
+  - the same treatment destination ATAs get. Rent comes from the fee payer.
+- `governance-withdraw` is rejected by SPL Governance while any cast vote is
+  still active. Relinquish first.
+- Only the canonical SPL Governance program ID gets a decoded signing screen.
+  A DAO running a custom governance program falls back to a full raw dump
+  (program, every account, hex data) - still safe, just less readable. Add the
+  program ID to `GOVERNANCE_PROGRAM_IDS` in `src/utils/describe.ts` to get a
+  friendly decode.
+
+## What the cold wallet actually verifies
+
+`sign` never trusts the online machine. Before anything is displayed or signed
+it independently recomputes the digest from the raw instruction bytes in
+`unsigned-tx.json` and refuses if the result differs from the digest the file
+claims:
+
+```
+REFUSING TO SIGN: the digest in this file does not match its own instructions.
+```
+
+That is why `unsigned-tx.json` carries `seedBase64` - the public on-chain
+hashchain seed - so the offline machine can rebuild the digest with no network
+access. The confirmation screen is then rendered by decoding those same bytes:
+
+```
+Action: EXECUTE the following sub-instruction(s):
+  [0] System Program (11111111111111111111111111111111)
+        -> SOL TRANSFER 0.05 SOL (50000000 lamports)
+           from GepJXzCrwebWe1qCD4Hace1A9bbwVru5Fcn8bQJTGdzA
+           to   3iAnUKLYgszyh9A3HZxnSnuhhu7kRYY7edAxTP2R9MfC
+  ---
+  Producer label (UNVERIFIED): Transfer 0.05 SOL to 3iAnUKLY...
+```
+
+The producer's own description is shown last and explicitly marked
+`UNVERIFIED`, because nothing binds it to what will execute. Instructions from
+programs the decoder does not recognise are dumped in full - program ID, every
+account with its flags, and the raw data in hex - so a sub-instruction can
+never hide behind a friendly-looking label.
+
 
 ## Setup
 
@@ -285,9 +400,13 @@ bundled cargo 1.84. Upgrade pins when newer platform-tools ship.
 
 ## Deploying the program
 
-The repo ships a dev program ID
-(`DkKZTgUDgkqUu5tck69uQJKf1deNzSY7YcU8F47oLXPZ`) baked into both
-`declare_id!()` and `Anchor.toml`. For your own deployment:
+The program is deployed at `FkCL7nUJym3Yc9PVgr7TQ3TRn5uJApu7FdGSV1X6rKVd` on
+**mainnet-beta**, and at the same address on devnet for testing. That ID is baked
+into `declare_id!()`, `Anchor.toml` and `src/utils/vector.ts`.
+
+Because the digest binds the program ID (see below), a signature produced against
+one deployment can never be replayed against another - so a private deployment is
+fully isolated from the public one. For your own:
 
 ```bash
 # Generate a fresh program keypair
