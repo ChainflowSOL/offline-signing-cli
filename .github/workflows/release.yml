@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write   # npm provenance
 
 jobs:
   # Gate every release on the offline suites. They need no network, keys or
@@ -91,42 +90,21 @@ jobs:
           body: |
             ## Install
 
-            **Online machine** - constructing transactions and broadcasting:
-            ```
-            npx offline-signer-cli@${{ github.ref_name }} --help
-            ```
+            Download the binary for your platform below. It is self-contained -
+            no Node installation, no dependency resolution, nothing to install.
 
-            **Offline machine** - signing: download the binary for your
-            platform below, verify it, then move it across on removable media.
+            Verify before use:
             ```
             sha256sum -c SHA256SUMS.txt --ignore-missing
+            chmod +x offline-signer-*
             ```
-            The offline machine needs no network, no Node installation and no
-            dependency resolution - the binary is self-contained.
 
-  publish-npm:
-    needs: build
-    runs-on: ubuntu-latest
-    # Stays skipped until an NPM_TOKEN repository secret exists, so you can cut
-    # binary-only releases before deciding to publish to npm.
-    if: ${{ github.event_name == 'push' }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with: { version: 10.14.0 }
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-          registry-url: https://registry.npmjs.org
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - name: Publish
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then
-            echo "NPM_TOKEN secret not set - skipping npm publish."
-            exit 0
-          fi
-          npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+            You need it on **two** machines:
+
+            - **Online** - `init-authority`, the `*-transfer` / `stake-*` /
+              `governance-*` builders, and `broadcast`.
+            - **Offline (air-gapped)** - `sign`, and nothing else. Move the
+              binary across on removable media alongside `unsigned-tx.json`.
+
+            Verifying the checksum matters most on the offline machine: it is
+            the only integrity check available there.

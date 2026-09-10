@@ -1,10 +1,19 @@
 {
   "name": "offline-signer-cli",
   "version": "1.0.0",
+  "private": true,
   "description": "Offline Solana transaction signing CLI. The cold wallet signs a 32-byte digest, never a full transaction.",
   "bin": {
     "offline-signer": "dist/bundle.js",
     "offline-signer-cli": "dist/bundle.js"
+  },
+  "files": [
+    "dist/bundle.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
   },
   "scripts": {
     "build:ts": "tsc",
@@ -15,7 +24,7 @@
     "anchor:build": "anchor build",
     "anchor:test": "anchor test",
     "build:binaries": "pnpm build && pkg dist/bundle.js --output dist/executables/offline-signer",
-    "prepublishOnly": "pnpm exec tsc --noEmit && pnpm build"
+    "prepack": "pnpm exec tsc --noEmit && pnpm build"
   },
   "keywords": [
     "solana",
@@ -29,6 +38,10 @@
   ],
   "author": "",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kym0211/offline-signer-cli.git"
+  },
   "packageManager": "pnpm@10.14.0",
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
@@ -60,17 +73,5 @@
   "pkg": {
     "scripts": "dist/bundle.js",
     "outputPath": "dist/executables"
-  },
-  "files": [
-    "dist/bundle.js",
-    "README.md",
-    "LICENSE"
-  ],
-  "engines": {
-    "node": ">=18"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Kym0211/offline-signer-cli.git"
   }
 }
