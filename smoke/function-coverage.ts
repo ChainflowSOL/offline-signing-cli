@@ -43,10 +43,17 @@ import {
   findVaultPda,
 } from "../src/utils/vector";
 import { serializeInstruction } from "../src/utils/io";
+import { keyPath, loadOrCreate } from "./testkeys";
+
+// The CLI under test. Defaults to the TypeScript source; set OFS_CLI to a
+// packaged binary to run these same checks against a release artifact, e.g.
+//   OFS_CLI=./dist/executables/offline-signer-linux-x64 pnpm exec ts-node smoke/...
+const CLI = process.env.OFS_CLI ?? "pnpm exec ts-node src/index.ts";
+
 
 const REPO = path.resolve(__dirname, "..");
 const SCRATCH = path.resolve(__dirname);
-const cold = new PublicKey("GULFyMN687tE8ZhdCSTb7tGSjSectcVUs2P7XUFjSzqb");
+const cold = loadOrCreate("cold-test").publicKey;
 const hot = new PublicKey("6bZJmyGwb3i1XkhjsrkrHHqkAAB82g1AwgqM2rY2zZWF");
 const alice = new PublicKey("3iAnUKLYgszyh9A3HZxnSnuhhu7kRYY7edAxTP2R9MfC");
 const validator = new PublicKey("deepPy86gApSci6B3QHsncudzQBMNX8f6Wwwsz64bUz");
@@ -434,7 +441,7 @@ async function run() {
     let stdout = "";
     try {
       stdout = execSync(
-        `echo yes | pnpm exec ts-node src/index.ts sign --keypair smoke/cold-test.json --unsigned ${file}`,
+        `echo yes | ${CLI} sign --keypair ${keyPath("cold-test")} --unsigned ${file}`,
         { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }
       );
     } catch (e: any) {

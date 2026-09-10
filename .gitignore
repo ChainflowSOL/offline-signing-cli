@@ -36,6 +36,7 @@ nonce-address.json
 vector-info.json
 # Keep the test scripts in smoke/, ignore only the throwaway cold keypair.
 smoke/cold-test.json
+smoke/hot-test.json
 
 # -----------------------------
 # OS / System Files

@@ -59,6 +59,19 @@ jobs:
       - run: pnpm build
       - name: Package binary
         run: pnpm exec pkg dist/bundle.js --targets ${{ matrix.target }} --output dist/executables/${{ matrix.name }}
+
+      # Bundling can break what works under ts-node (dynamic requires, path
+      # resolution), so re-run the adversarial suites against the artifact we
+      # are about to ship, not just against the source. Skipped on Windows,
+      # where the suites' shell pipelines do not run.
+      - name: Verify the packaged binary
+        if: runner.os != 'Windows'
+        env:
+          OFS_CLI: ./dist/executables/${{ matrix.name }}
+        run: |
+          chmod +x "$OFS_CLI"
+          pnpm exec ts-node smoke/adversarial-offline.ts
+          pnpm exec ts-node smoke/function-coverage.ts
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}

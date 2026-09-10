@@ -18,26 +18,25 @@ import {
   findVaultPda,
 } from "../src/utils/vector";
 import { serializeInstruction } from "../src/utils/io";
+import { loadOrCreate, keyPath } from "./testkeys";
+
+// The CLI under test. Defaults to the TypeScript source; set OFS_CLI to a
+// packaged binary to run these same checks against a release artifact, e.g.
+//   OFS_CLI=./dist/executables/offline-signer-linux-x64 pnpm exec ts-node smoke/...
+const CLI = process.env.OFS_CLI ?? "pnpm exec ts-node src/index.ts";
+
 
 const REPO = path.resolve(__dirname, "..");
 const SCRATCH = path.resolve(__dirname);
 
-const coldKp = Keypair.fromSecretKey(
-  new Uint8Array(JSON.parse(fs.readFileSync(path.join(SCRATCH, "cold-test.json"), "utf-8")))
-);
+const coldKp = loadOrCreate("cold-test");
 const cold = coldKp.publicKey;
 const [vault] = findVaultPda(cold);
 const alice = new PublicKey("3iAnUKLYgszyh9A3HZxnSnuhhu7kRYY7edAxTP2R9MfC");
 const attacker = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
 
 // Load the real hot-wallet keypair so we can construct payloads that reference it.
-const hotKp = Keypair.fromSecretKey(
-  new Uint8Array(
-    JSON.parse(
-      fs.readFileSync(path.join(process.env.HOME!, ".config/solana/id.json"), "utf-8")
-    )
-  )
-);
+const hotKp = loadOrCreate("hot-test");
 const hot = hotKp.publicKey;
 
 const seed = Buffer.alloc(32, 0xab);
@@ -171,11 +170,11 @@ for (const c of cases) {
   fs.writeFileSync(uFile, JSON.stringify(c.unsigned, null, 2));
   fs.writeFileSync(sFile, JSON.stringify(c.signed, null, 2));
 
-  const payer = c.payer ?? path.join(process.env.HOME!, ".config/solana/id.json");
+  const payer = c.payer ?? keyPath("hot-test");
   let stdout = "";
   try {
     stdout = execSync(
-      `pnpm exec ts-node src/index.ts broadcast --env devnet --unsigned ${uFile} --signature ${sFile} --payer ${payer}`,
+      `${CLI} broadcast --env devnet --unsigned ${uFile} --signature ${sFile} --payer ${payer}`,
       { cwd: REPO, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }
     );
   } catch (e: any) {

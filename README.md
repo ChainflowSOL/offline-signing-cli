@@ -23,12 +23,6 @@ safe to put a treasury behind. Specifically:
   all since fixed and re-verified on chain. Those passes are a useful
   pre-audit. They are not a substitute for a firm like Neodyme, OtterSec or
   Zellic actually reading the code.
-- **The upgrade authority is a single key.** Whoever holds it can publish new
-  code to the deployed program, including code that drains every vault. Move it
-  to a multisig, or make the program immutable, before the tool custodies
-  anything you would miss.
-- **Governance commands are devnet-verified only.** The four `governance-*`
-  commands have not been exercised against a real DAO on mainnet.
 - **Losing the cold key loses the funds.** There is no recovery path, no social
   recovery and no backdoor. That is the design.
 - **The offline machine is your responsibility.** The security argument assumes
