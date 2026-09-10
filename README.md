@@ -9,6 +9,39 @@ This replaces the previous durable-nonce design. Durable nonces are being
 deprecated; Vector uses no nonces and has no per-cluster external dependency
 beyond the always-deployed Ed25519 precompile.
 
+## Status and disclaimer
+
+**This software has not been professionally audited. Use it at your own risk.**
+
+The program is deployed and working, and the offline-signing flow has been
+exercised end to end on mainnet with real funds. That is not the same as being
+safe to put a treasury behind. Specifically:
+
+- **No third-party audit.** The code has been through three independent review
+  passes (a targeted security review, a multi-agent code review, and a
+  hypothesis-driven probe of the on-chain program), which found five issues -
+  all since fixed and re-verified on chain. Those passes are a useful
+  pre-audit. They are not a substitute for a firm like Neodyme, OtterSec or
+  Zellic actually reading the code.
+- **The upgrade authority is a single key.** Whoever holds it can publish new
+  code to the deployed program, including code that drains every vault. Move it
+  to a multisig, or make the program immutable, before the tool custodies
+  anything you would miss.
+- **Governance commands are devnet-verified only.** The four `governance-*`
+  commands have not been exercised against a real DAO on mainnet.
+- **Losing the cold key loses the funds.** There is no recovery path, no social
+  recovery and no backdoor. That is the design.
+- **The offline machine is your responsibility.** The security argument assumes
+  the signing machine is genuinely air-gapped and the cold key was generated
+  there. Neither is something this tool can enforce.
+
+If you are evaluating this for anything beyond experimentation, read
+`docs/mainnet-deployment.md` - it lists the accepted risks and the operational
+gates in full.
+
+Licensed under Apache-2.0, which means it is provided "as is", without warranty
+of any kind. See `LICENSE`.
+
 ## Architecture
 
 ### System view
@@ -439,9 +472,10 @@ tampered-digest rejection, missing-precompile rejection.
   cross-instruction data references — all signature/pubkey/message bytes
   must live inside the precompile's own instruction data.
 - The program enforces exactly one signature per precompile instruction.
-- `is_signer = true` is allowed in sub-instructions only for the Vault PDA;
-  any other signer would require a tx-level signature the cold wallet cannot
-  provide.
+- `is_signer = true` in a sub-instruction is allowed only for the Vault PDA,
+  or for the optional `co_signer` when one is supplied (used solely by
+  `governance-cast-vote`). Both pubkeys are inside `sub_ix_data`, so the cold
+  wallet's signature covers exactly who is permitted to sign.
 - The hashchain initial seed mixes the slot and unix_timestamp from `Clock`
   so a close-and-reinit cycle cannot resurrect an old pre-signed digest.
 
