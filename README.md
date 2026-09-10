@@ -36,6 +36,50 @@ gates in full.
 Licensed under Apache-2.0, which means it is provided "as is", without warranty
 of any kind. See `LICENSE`.
 
+## Install
+
+### Option A - prebuilt binary
+
+Every tagged release publishes a self-contained executable per platform. No
+Node installation, no dependency resolution, nothing to build.
+
+Download from the [Releases page](https://github.com/ChainflowSOL/offline-signing-cli/releases):
+
+| Platform            | Asset                        |
+|---------------------|------------------------------|
+| Linux x64           | `offline-signer-linux-x64`   |
+| macOS Intel         | `offline-signer-macos-x64`   |
+| macOS Apple Silicon | `offline-signer-macos-arm64` |
+| Windows x64         | `offline-signer-win-x64.exe` |
+
+Verify it before trusting it, then put it on your PATH:
+
+```bash
+sha256sum -c SHA256SUMS.txt --ignore-missing
+chmod +x offline-signer-linux-x64
+sudo mv offline-signer-linux-x64 /usr/local/bin/offline-signer
+offline-signer --help
+```
+
+You need the binary on **two** machines:
+
+| Machine                  | Commands it runs |
+|--------------------------|------------------|
+| **Online**               | `init-authority`, `sol-transfer`, `token-transfer`, `stake-*`, `governance-*`, `close-authority`, `broadcast` |
+| **Offline (air-gapped)** | `sign` - and nothing else |
+
+Copy it to the air-gapped machine on the same removable media you use for
+`unsigned-tx.json`. Checking the checksum matters most there: on a machine with
+no network it is the only integrity check available.
+
+### Option B - build it yourself
+
+See [Building from source](#building-from-source). Building the CLI needs only
+Node and pnpm - no Rust, Anchor or Solana toolchain.
+
+This project is **not published to npm**. Prebuilt binaries and source are the
+only two distribution channels.
+
 ## Architecture
 
 ### System view
@@ -402,7 +446,89 @@ account with its flags, and the raw data in hex - so a sub-instruction can
 never hide behind a friendly-looking label.
 
 
-## Setup
+## Building from source
+
+Building the CLI needs **only Node and pnpm**. Rust, Anchor and the Solana CLI
+are needed solely for the on-chain program - not for the binary. That trips
+people up, because this repo contains both.
+
+| Prerequisite | Version                          |
+|--------------|----------------------------------|
+| Node.js      | 18+ (releases are built on 20)   |
+| pnpm         | 10+                              |
+| git          | any                              |
+
+```bash
+git clone https://github.com/ChainflowSOL/offline-signing-cli.git
+cd offline-signing-cli
+pnpm install --frozen-lockfile
+pnpm build:binaries
+```
+
+That writes `dist/executables/offline-signer` for the platform you are on.
+Three stages run under the hood:
+
+| Stage    | Tool           | Output |
+|----------|----------------|--------|
+| Compile  | `tsc`          | `dist/*.js` |
+| Bundle   | `esbuild`      | `dist/bundle.js` (~1.7 MB, dependencies inlined) |
+| Package  | `@yao-pkg/pkg` | `dist/executables/offline-signer` (~61 MB, Node runtime embedded) |
+
+To pick a target and asset name explicitly, matching what a release publishes:
+
+```bash
+pnpm build
+pnpm exec pkg dist/bundle.js \
+  --targets node20-linux-x64 \
+  --output dist/executables/offline-signer-linux-x64
+```
+
+### Verifying your build
+
+Run the offline suites against the binary you just produced - not just against
+the source. Bundling can break what works under `ts-node` (dynamic requires,
+path resolution), so this is the check that matters. It needs no network, no
+keys and no funds, and it is what CI runs before publishing a release:
+
+```bash
+export OFS_CLI=./dist/executables/offline-signer-linux-x64
+pnpm exec ts-node smoke/adversarial-offline.ts   # RESULT: 13/13 passed
+pnpm exec ts-node smoke/function-coverage.ts     # RESULT: 11/11 passed
+```
+
+### Two limitations worth knowing
+
+**You can only build for the platform you are on.** `pkg` cannot cross-compile:
+
+```
+$ pnpm exec pkg dist/bundle.js --targets node20-macos-arm64 ...
+Error! Not able to build for 'macos' here, only for 'linux'
+```
+
+Build on a Mac for a Mac binary, on Windows for Windows. That is why
+`.github/workflows/release.yml` fans out across four runners instead of
+packaging everything on one.
+
+**Builds are not byte-reproducible.** Two builds of identical source produce
+different binaries:
+
+```
+build A: dcfdc0b6b49729efbb9c84afb5a8f0740e6cbadd...
+build B: 6b6f0c8ab586428663d0c9dffb8595f9a6012f5e...
+```
+
+So **a locally built binary will not match `SHA256SUMS.txt`**, and that
+mismatch is expected rather than a tampering signal. The consequence:
+
+- `SHA256SUMS.txt` proves a **downloaded** binary arrived intact. It cannot
+  prove a released binary was built from the published source.
+- If you would rather not trust the release build, build your own and run your
+  own binary. Do not build one and compare hashes - that comparison will always
+  fail.
+
+### Building the on-chain program
+
+Only needed if you are deploying your own instance of the Vector program.
 
 ```bash
 pnpm install
@@ -410,16 +536,12 @@ anchor build          # builds the on-chain program (target/deploy/vector.so)
 anchor test           # runs the integration tests against solana-test-validator
 ```
 
-### Toolchain
-
 | Tool          | Version tested |
 |---------------|----------------|
 | anchor        | 0.32.1         |
 | solana CLI    | 3.0.13 (Agave) |
 | rustc (host)  | 1.89.0         |
 | rustc (SBPF)  | 1.84.1 (platform-tools v1.51) |
-| node          | 18+            |
-| pnpm          | 10+            |
 
 The `Cargo.lock` pins `proc-macro-crate`, `indexmap`, and
 `unicode-segmentation` to versions compatible with platform-tools v1.51's
