@@ -3,7 +3,11 @@
 # -----------------------------
 node_modules
 .yarn
-pnpm-lock.yaml
+# pnpm-lock.yaml is deliberately committed. It pins every transitive
+# dependency to an exact version + integrity hash, which is what makes
+# `pnpm install --frozen-lockfile` reproducible and what stops a
+# compromised transitive package reaching a release binary. CI also
+# needs it for setup-node's pnpm cache. Do not re-add it here.
 
 # -----------------------------
 # Rust / Anchor
