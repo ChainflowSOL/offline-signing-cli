@@ -479,7 +479,7 @@ To pick a target and asset name explicitly, matching what a release publishes:
 ```bash
 pnpm build
 pnpm exec pkg dist/bundle.js \
-  --targets node20-linux-x64 \
+  --targets node22-linux-x64 \
   --output dist/executables/offline-signer-linux-x64
 ```
 
@@ -501,7 +501,7 @@ pnpm exec ts-node smoke/function-coverage.ts     # RESULT: 11/11 passed
 **You can only build for the platform you are on.** `pkg` cannot cross-compile:
 
 ```
-$ pnpm exec pkg dist/bundle.js --targets node20-macos-arm64 ...
+$ pnpm exec pkg dist/bundle.js --targets node22-macos-arm64 ...
 Error! Not able to build for 'macos' here, only for 'linux'
 ```
 
