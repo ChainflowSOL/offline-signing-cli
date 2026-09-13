@@ -496,18 +496,29 @@ pnpm exec ts-node smoke/adversarial-offline.ts   # RESULT: 13/13 passed
 pnpm exec ts-node smoke/function-coverage.ts     # RESULT: 11/11 passed
 ```
 
-### Two limitations worth knowing
+### Cross-building for other platforms
 
-**You can only build for the platform you are on.** `pkg` cannot cross-compile:
+One host can build all four artifacts, because `pkg` downloads a prebuilt Node
+base binary per target rather than compiling one:
 
+```bash
+for t in linux-x64 macos-x64 macos-arm64 win-x64; do
+  pnpm exec pkg dist/bundle.js --targets node22-$t \
+    --output dist/executables/offline-signer-$t
+done
 ```
-$ pnpm exec pkg dist/bundle.js --targets node22-macos-arm64 ...
-Error! Not able to build for 'macos' here, only for 'linux'
-```
 
-Build on a Mac for a Mac binary, on Windows for Windows. That is why
-`.github/workflows/release.yml` fans out across four runners instead of
-packaging everything on one.
+This works **only for Node versions that have prebuilts**. `pkg-fetch` ships
+them for Node 22, 24 and 26; there are none for Node 20. Pick a target with no
+prebuilt and `pkg` falls back to compiling Node from source - roughly 45
+minutes on Linux and macOS, and an outright failure on Windows, which has no
+usable toolchain for it. Stay on `node22-*` unless you have checked that a
+newer major has prebuilts for all four platforms.
+
+CI still builds on more than one runner so each artifact can be smoke-tested
+natively, not because cross-building is impossible.
+
+### One limitation worth knowing
 
 **Builds are not byte-reproducible.** Two builds of identical source produce
 different binaries:
