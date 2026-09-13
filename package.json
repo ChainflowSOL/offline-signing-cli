@@ -1,33 +1,67 @@
 {
   "name": "offline-signer-cli",
   "version": "1.0.0",
-  "description": "A CLI tool for offline Solana transaction signing.",
+  "private": true,
+  "description": "Offline Solana transaction signing CLI. The cold wallet signs a 32-byte digest, never a full transaction.",
   "bin": {
+    "offline-signer": "dist/bundle.js",
     "offline-signer-cli": "dist/bundle.js"
+  },
+  "files": [
+    "dist/bundle.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
   },
   "scripts": {
     "build:ts": "tsc",
     "build:bundle": "esbuild dist/index.js --bundle --minify --platform=node --target=node18 --outfile=dist/bundle.js --format=cjs",
-    "build": "pnpm build:ts && pnpm build:bundle && pkg .",
+    "build": "pnpm build:ts && pnpm build:bundle",
     "start": "node dist/bundle.js",
     "dev": "ts-node src/index.ts",
-    "create_nonce": "ts-node src/commands/create_nonce.ts"
+    "anchor:build": "anchor build",
+    "anchor:test": "anchor test",
+    "build:binaries": "pnpm build && pkg dist/bundle.js --output dist/executables/offline-signer",
+    "prepack": "pnpm exec tsc --noEmit && pnpm build"
   },
-  "keywords": [],
+  "keywords": [
+    "solana",
+    "offline-signing",
+    "cold-wallet",
+    "air-gapped",
+    "ed25519",
+    "anchor",
+    "staking",
+    "governance"
+  ],
   "author": "",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kym0211/offline-signer-cli.git"
+  },
   "packageManager": "pnpm@10.14.0",
   "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/spl-governance": "^0.3.28",
     "@solana/spl-token": "^0.4.14",
     "@solana/web3.js": "^1.98.4",
     "tweetnacl": "^1.0.3",
     "yargs": "^17.7.2"
   },
   "devDependencies": {
+    "@types/bn.js": "^5.1.6",
+    "@types/chai": "^4.3.20",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^24.8.1",
     "@types/yargs": "^17.0.33",
+    "@yao-pkg/pkg": "^6.6.0",
+    "chai": "^4.5.0",
     "esbuild": "^0.24.0",
-    "pkg": "^5.8.1",
+    "mocha": "^10.7.0",
+    "ts-mocha": "^10.0.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   },
@@ -38,11 +72,6 @@
   },
   "pkg": {
     "scripts": "dist/bundle.js",
-    "targets": [
-      "node18-win-x64",
-      "node18-macos-x64",
-      "node18-linux-x64"
-    ],
     "outputPath": "dist/executables"
   }
 }

@@ -12,93 +12,290 @@
 
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import { signOffline } from "./commands/sign"; 
-import { broadcast } from "./commands/broadcast"; 
-import { constructSolTransfer } from "./commands/sol_transfer"
-import { constructTokenTransfer } from "./commands/token_transfer"
-import { createNonce } from "./commands/create_nonce"
+import { initAuthority } from "./commands/init_authority";
+import { constructSolTransfer } from "./commands/sol_transfer";
+import { constructTokenTransfer } from "./commands/token_transfer";
+import { constructClose } from "./commands/close";
+import {
+  constructStakeCreate,
+  constructStakeDelegate,
+  constructStakeDeactivate,
+  constructStakeWithdraw,
+} from "./commands/stake";
+import {
+  constructGovernanceDeposit,
+  constructGovernanceCastVote,
+  constructGovernanceRelinquishVote,
+  constructGovernanceWithdraw,
+} from "./commands/governance";
+import { signOffline } from "./commands/sign";
+import { broadcast } from "./commands/broadcast";
 
-const argv = yargs(hideBin(process.argv))
+yargs(hideBin(process.argv))
   .scriptName("offline-signer")
-  .option('env', {
-      alias: 'e',
-      type: 'string',
-      description: 'Network environment (devnet/mainnet)',
-      default: 'devnet',
-      global: true,
+  .option("env", {
+    alias: "e",
+    type: "string",
+    description: "Network: devnet | mainnet | <custom-rpc-url>",
+    default: "devnet",
+    global: true,
   })
-  // CREATE NONCE
   .command(
-    'create-nonce',
-    'Create a new durable nonce account',
-    (yargs) => {
-      return yargs
-        .option('authority', { alias: 'a', type: 'string', demandOption: true, })
-        .option('payer', { alias: 'p', type: 'string', default: 'hot-wallet.json', });
-    },
-    (argv) => {
-      createNonce(argv.env, argv.payer, argv.authority);
-    }
+    "init-authority",
+    "Initialize the Vector PDA for a cold-wallet pubkey",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true, description: "Cold-wallet pubkey" })
+        .option("payer", { alias: "p", type: "string", default: "hot-wallet.json", description: "Hot-wallet keypair path" }),
+    (argv) =>
+      initAuthority(argv.env as string, argv.payer as string, argv.cold as string)
   )
-  // SOL TRANSFER
   .command(
-    'sol-transfer',
-    'Construct an unsigned SOL transfer',
-    (yargs) => {
-      return yargs
-        .option('sender', { alias: 's', type: 'string', demandOption: true })
-        .option('recipient', { alias: 'r', type: 'string', demandOption: true })
-        .option('amount', { alias: 'a', type: 'number', demandOption: true })
-        .option('nonce', { alias: 'n', type: 'string', demandOption: true });
-    },
-    (argv) => {
-      constructSolTransfer(argv.env, argv.sender, argv.recipient, argv.nonce, argv.amount);
-    }
+    "sol-transfer",
+    "Build an unsigned SOL transfer from the Vector PDA",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("recipient", { alias: "r", type: "string", demandOption: true })
+        .option("amount", { alias: "a", type: "number", demandOption: true })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructSolTransfer(
+        argv.env as string,
+        argv.cold as string,
+        argv.recipient as string,
+        argv.payer as string,
+        argv.amount as number
+      )
   )
-  // TOKEN TRANSFER
   .command(
-    'token-transfer',
-    'Construct an unsigned SPL Token transfer',
-    (yargs) => {
-      return yargs
-        .option('sender', { alias: 's', type: 'string', demandOption: true })
-        .option('recipient', { alias: 'r', type: 'string', demandOption: true })
-        .option('mint', { alias: 'm', type: 'string', demandOption: true })
-        .option('amount', { alias: 'a', type: 'number', demandOption: true })
-        .option('nonce', { alias: 'n', type: 'string', demandOption: true })
-        .option('fee-payer', { alias: 'f', type: 'string' });
-    },
-    (argv) => {
-      const feePayer = argv.feePayer || argv.sender;
-      constructTokenTransfer(argv.env, argv.sender, argv.recipient, argv.mint, argv.amount, argv.nonce, feePayer);
-    }
+    "token-transfer",
+    "Build an unsigned SPL token transfer from the Vector PDA",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("recipient", { alias: "r", type: "string", demandOption: true })
+        .option("mint", { alias: "m", type: "string", demandOption: true })
+        .option("amount", { alias: "a", type: "number", demandOption: true })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructTokenTransfer(
+        argv.env as string,
+        argv.cold as string,
+        argv.recipient as string,
+        argv.mint as string,
+        argv.amount as number,
+        argv.payer as string
+      )
   )
-  // SIGN
   .command(
-    'sign',
-    'Sign a transaction (Offline)',
-    (yargs) => {
-      return yargs
-        .option('unsigned', { alias: 'u', type: 'string', default: 'unsigned-tx.json' })
-        .option('keypair', { alias: 'k', type: 'string', default: 'cold-wallet.json' });
-    },
-    async (argv) => {
-      await signOffline(argv.keypair, argv.unsigned);
-    }
+    "stake-create",
+    "Build an unsigned: vault-funded stake account creation (auths = Vault PDA)",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("seed", { alias: "s", type: "string", demandOption: true, description: "Seed string for the stake account address (derived from vault)" })
+        .option("amount", { alias: "a", type: "number", demandOption: true, description: "SOL to stake (incl. rent)" })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructStakeCreate(
+        argv.env as string,
+        argv.cold as string,
+        argv.seed as string,
+        argv.amount as number,
+        argv.payer as string
+      )
   )
-  // BROADCAST
   .command(
-    'broadcast',
-    'Broadcast a signed transaction',
-    (yargs) => {
-      return yargs
-        .option('unsigned', { alias: 'u', type: 'string', default: 'unsigned-tx.json' })
-        .option('signature', { alias: 's', type: 'string', default: 'signed-tx.json' });
-    },
-    (argv) => {
-      broadcast(argv.env, argv.unsigned, argv.signature);
-    }
+    "stake-delegate",
+    "Build an unsigned delegate-to-validator instruction",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("stake", { alias: "s", type: "string", demandOption: true, description: "Stake account pubkey" })
+        .option("validator", { alias: "v", type: "string", demandOption: true, description: "Validator vote-account pubkey" })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructStakeDelegate(
+        argv.env as string,
+        argv.cold as string,
+        argv.stake as string,
+        argv.validator as string,
+        argv.payer as string
+      )
   )
-  .demandCommand(1, 'You must provide a command.')
+  .command(
+    "stake-deactivate",
+    "Build an unsigned deactivate-stake instruction",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("stake", { alias: "s", type: "string", demandOption: true, description: "Stake account pubkey" })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructStakeDeactivate(
+        argv.env as string,
+        argv.cold as string,
+        argv.stake as string,
+        argv.payer as string
+      )
+  )
+  .command(
+    "stake-withdraw",
+    "Build an unsigned withdraw-from-stake instruction",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("stake", { alias: "s", type: "string", demandOption: true, description: "Stake account pubkey" })
+        .option("amount", { alias: "a", type: "number", demandOption: true, description: "SOL to withdraw" })
+        .option("recipient", { alias: "r", type: "string", demandOption: true })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructStakeWithdraw(
+        argv.env as string,
+        argv.cold as string,
+        argv.stake as string,
+        argv.amount as number,
+        argv.recipient as string,
+        argv.payer as string
+      )
+  )
+  .command(
+    "governance-deposit",
+    "Build an unsigned deposit of governance tokens into a DAO realm",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("governance-program", { type: "string", demandOption: true, description: "SPL Governance program pubkey" })
+        .option("realm", { type: "string", demandOption: true })
+        .option("mint", { alias: "m", type: "string", demandOption: true, description: "Governing token mint" })
+        .option("amount", { alias: "a", type: "number", demandOption: true })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructGovernanceDeposit(
+        argv.env as string,
+        argv.cold as string,
+        argv["governance-program"] as string,
+        argv.realm as string,
+        argv.mint as string,
+        argv.amount as number,
+        argv.payer as string
+      )
+  )
+  .command(
+    "governance-cast-vote",
+    "Build an unsigned cast-vote on a proposal",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("governance-program", { type: "string", demandOption: true })
+        .option("realm", { type: "string", demandOption: true })
+        .option("governance", { type: "string", demandOption: true, description: "Governance account (parent of the proposal)" })
+        .option("proposal", { type: "string", demandOption: true })
+        .option("proposal-owner-record", { type: "string", demandOption: true, description: "TokenOwnerRecord of the proposal's creator" })
+        .option("mint", { alias: "m", type: "string", demandOption: true, description: "Governing token mint" })
+        .option("vote", { alias: "v", type: "string", demandOption: true, choices: ["yes", "no", "abstain", "veto"] })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructGovernanceCastVote(
+        argv.env as string,
+        argv.cold as string,
+        argv["governance-program"] as string,
+        argv.realm as string,
+        argv.governance as string,
+        argv.proposal as string,
+        argv["proposal-owner-record"] as string,
+        argv.mint as string,
+        argv.vote as string,
+        argv.payer as string
+      )
+  )
+  .command(
+    "governance-relinquish-vote",
+    "Build an unsigned relinquish-vote (cancel a cast vote before finalization)",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("governance-program", { type: "string", demandOption: true })
+        .option("realm", { type: "string", demandOption: true })
+        .option("governance", { type: "string", demandOption: true })
+        .option("proposal", { type: "string", demandOption: true })
+        .option("mint", { alias: "m", type: "string", demandOption: true, description: "Governing token mint" })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructGovernanceRelinquishVote(
+        argv.env as string,
+        argv.cold as string,
+        argv["governance-program"] as string,
+        argv.realm as string,
+        argv.governance as string,
+        argv.proposal as string,
+        argv.mint as string,
+        argv.payer as string
+      )
+  )
+  .command(
+    "governance-withdraw",
+    "Build an unsigned withdraw of governance tokens from a DAO realm",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("governance-program", { type: "string", demandOption: true })
+        .option("realm", { type: "string", demandOption: true })
+        .option("mint", { alias: "m", type: "string", demandOption: true, description: "Governing token mint" })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructGovernanceWithdraw(
+        argv.env as string,
+        argv.cold as string,
+        argv["governance-program"] as string,
+        argv.realm as string,
+        argv.mint as string,
+        argv.payer as string
+      )
+  )
+  .command(
+    "close-authority",
+    "Build an unsigned close (rent goes to --close-to)",
+    (y) =>
+      y
+        .option("cold", { alias: "c", type: "string", demandOption: true })
+        .option("close-to", { alias: "t", type: "string", demandOption: true, description: "Rent destination pubkey" })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet PUBKEY (fee payer)" }),
+    (argv) =>
+      constructClose(
+        argv.env as string,
+        argv.cold as string,
+        argv["close-to"] as string,
+        argv.payer as string
+      )
+  )
+  .command(
+    "sign",
+    "Sign the digest in unsigned-tx.json offline",
+    (y) =>
+      y
+        .option("unsigned", { alias: "u", type: "string", default: "unsigned-tx.json" })
+        .option("keypair", { alias: "k", type: "string", default: "cold-wallet.json" }),
+    (argv) =>
+      signOffline(argv.keypair as string, argv.unsigned as string)
+  )
+  .command(
+    "broadcast",
+    "Assemble [Ed25519 precompile, vector instruction] and broadcast",
+    (y) =>
+      y
+        .option("unsigned", { alias: "u", type: "string", default: "unsigned-tx.json" })
+        .option("signature", { alias: "s", type: "string", default: "signed-tx.json" })
+        .option("payer", { alias: "p", type: "string", demandOption: true, description: "Hot-wallet keypair path" }),
+    (argv) =>
+      broadcast(
+        argv.env as string,
+        argv.unsigned as string,
+        argv.signature as string,
+        argv.payer as string
+      )
+  )
+  .demandCommand(1, "You must provide a command.")
   .help()
   .parse();
